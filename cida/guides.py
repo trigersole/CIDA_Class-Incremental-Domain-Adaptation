@@ -1,0 +1,54 @@
+from dataclasses import dataclass
+
+import torch
+
+from .prototypes import GaussianBank, fit_gaussians
+
+
+def build_guides(model, source_prototypes, supports):
+    shared = model.f_e(source_prototypes.means.to(supports))
+    private = model.f_t(supports)
+    return torch.cat((shared, private), dim=0)
+
+
+@torch.no_grad()
+def nearest_guides(features, guides):
+    distance, labels = torch.cdist(features, guides).min(dim=1)
+    return labels, distance
+
+
+@torch.no_grad()
+def confident_indices(labels, distances, num_classes, fraction):
+    selected = []
+    for label in range(num_classes):
+        indices = (labels == label).nonzero(as_tuple=True)[0]
+        ordered = distances[indices].argsort(stable=True)
+        selected.append(indices[ordered[:int(fraction * len(indices))]])
+    return torch.cat(selected)
+
+
+@dataclass
+class TargetStatistics:
+    prototypes: GaussianBank
+    selected_ids: torch.Tensor
+    selected_labels: torch.Tensor
+    counts: torch.Tensor
+
+
+@torch.no_grad()
+def refresh_statistics(model, target_loader, source_prototypes, supports, ridge, fraction):
+    model.eval()
+    guides = build_guides(model, source_prototypes, supports)
+    features, ids = [], []
+    for images, indices in target_loader:
+        features.append(model.f_t(images.to(supports.device)))
+        ids.append(indices)
+    features = torch.cat(features)
+    ids = torch.cat(ids)
+    labels, distances = nearest_guides(features, guides)
+    count = len(guides)
+    prototypes = fit_gaussians(features, labels, count, ridge, fallback_means=guides)
+    selected = confident_indices(labels, distances, count, fraction)
+    return TargetStatistics(
+        prototypes, ids[selected.cpu()], labels[selected].cpu(), labels.bincount(minlength=count).cpu()
+    )
