@@ -7,7 +7,14 @@ from .prototypes import GaussianBank, fit_gaussians
 
 def build_guides(model, source_prototypes, supports):
     shared = model.f_e(source_prototypes.means.to(supports))
-    private = model.f_t(supports)
+    # Use running statistics for Office support images so that each guide
+    # is independent of the other support images. Gradients still reach f_t.
+    was_training = model.f_t.training
+    model.f_t.eval()
+    try:
+        private = model.f_t(supports)
+    finally:
+        model.f_t.train(was_training)
     return torch.cat((shared, private), dim=0)
 
 

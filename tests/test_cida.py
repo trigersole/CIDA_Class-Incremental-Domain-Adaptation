@@ -12,6 +12,7 @@ from cida.cli import load_checkpoint, save_checkpoint
 from cida.data import PRIVATE, target_data, target_evaluation
 from cida.guides import confident_indices, nearest_guides
 from cida.models import AdaptationModel, SourceModel
+from cida.office import office_classes, office_trial
 from cida.prototypes import GaussianBank, fit_gaussians, negative_mask, separability_loss
 from cida.training import target_loss, target_optimizers, update
 
@@ -103,6 +104,31 @@ class CidaTests(unittest.TestCase):
             for original, copy in zip(source.f_s.parameters(), adapted.f_t.parameters()):
                 torch.testing.assert_close(original, copy)
                 self.assertNotEqual(original.data_ptr(), copy.data_ptr())
+
+    def test_office_splits_and_support_exclusion(self):
+        class OfficeFixture:
+            classes = [f"class_{i:02}" for i in range(31)]
+            class_to_idx = dict(zip(classes, range(31)))
+            targets = [i for i in range(31) for _ in range(2)]
+
+            def __getitem__(self, index):
+                return torch.tensor([index]), self.targets[index]
+
+        dataset = OfficeFixture()
+        for shared_count, private_count in ((20, 11), (10, 10)):
+            with self.subTest(shared_count=shared_count):
+                shared, private = office_classes(dataset.classes, shared_count)
+                self.assertEqual(len(shared), shared_count)
+                self.assertEqual(private, tuple(dataset.classes[20:20 + private_count]))
+                train, stats, supports, support_ids, test = office_trial(
+                    dataset, "dslr", shared, private, seed=7
+                )
+                self.assertEqual(len(supports), private_count)
+                self.assertEqual(train.indices, stats.indices)
+                self.assertEqual(train.indices, test.indices)
+                self.assertTrue(set(support_ids).isdisjoint(test.indices))
+                self.assertEqual({test[i][1] for i in range(len(test))},
+                                 set(range(shared_count + private_count)))
 
 
 if __name__ == "__main__":

@@ -73,9 +73,9 @@ def source_statistics(model, data_loader, device, ridge):
     return prototypes, global_prototype
 
 
-def train_source(model, dataset, config, device, sigma=3.0):
+def train_source(model, dataset, config, device, sigma=3.0, *, stats_dataset=None):
     train_loader = loader(dataset, config, shuffle=True)
-    stats_loader = loader(dataset, config)
+    stats_loader = loader(dataset if stats_dataset is None else stats_dataset, config)
     warmup = optimizer_for(config.lr, model.f_s, model.g_s)
     model.train()
     total, count = 0.0, 0
@@ -184,10 +184,11 @@ def target_loss(name, model, stats, source_prototypes, supports, images,
     raise ValueError(f"Unknown target loss {name}.")
 
 
-def train_target(model, target, supports, source_prototypes, config, projection_steps, fraction=0.2):
+def train_target(model, target, supports, source_prototypes, config, projection_steps,
+                 fraction=0.2, *, stats_target=None):
     history = [warmup_projections(model, source_prototypes, config, projection_steps)]
     target_loader = loader(target, config, shuffle=True)
-    stats_loader = loader(target, config)
+    stats_loader = loader(target if stats_target is None else stats_target, config)
     optimizers = target_optimizers(model, config.lr)
     order = tuple(optimizers)
     step = 0
