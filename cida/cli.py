@@ -29,6 +29,8 @@ def add_data_args(parser):
 
 def add_training_args(parser):
     add_data_args(parser)
+    parser.add_argument("--preset", choices=("baseline", "friend"), default=None,
+                        help="friend: modified Digits setup; requires a newly trained source.")
     parser.add_argument("--epochs", type=positive_int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--cov-ridge", type=float, help="Default: 0.1 for Digits, 0.14 for Office-31.")
@@ -43,6 +45,11 @@ def default_batch_size(benchmark):
 
 def training_config(args, benchmark="digits"):
     values = {field.name: getattr(args, field.name) for field in fields(TrainingConfig)}
+    values["preset"] = args.preset or "baseline"
+    if values["preset"] == "friend":
+        if benchmark != "digits":
+            raise ValueError("The friend preset currently supports Digits only.")
+        values["gaussian_score"] = "log-density"
     values["batch_size"] = args.batch_size or default_batch_size(benchmark)
     if args.cov_ridge is None:
         values["cov_ridge"] = 0.14 if benchmark == "office31" else 0.1

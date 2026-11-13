@@ -94,7 +94,7 @@ class CidaTests(unittest.TestCase):
         self.assertEqual([target[i][1] for i in range(len(target))], list(range(15)))
 
     def test_source_checkpoint_round_trip(self):
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
             path = Path(directory) / "model.pt"
             source = SourceModel(5)
             save_checkpoint(path, {"version": 1, "stage": "source", "model": source.state_dict()})

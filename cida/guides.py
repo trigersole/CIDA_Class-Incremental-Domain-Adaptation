@@ -25,12 +25,15 @@ def nearest_guides(features, guides):
 
 
 @torch.no_grad()
-def confident_indices(labels, distances, num_classes, fraction):
+def confident_indices(labels, distances, num_classes, fraction, minimum_one=False):
     selected = []
     for label in range(num_classes):
         indices = (labels == label).nonzero(as_tuple=True)[0]
         ordered = distances[indices].argsort(stable=True)
-        selected.append(indices[ordered[:int(fraction * len(indices))]])
+        count = int(fraction * len(indices))
+        if minimum_one and len(indices):
+            count = max(1, count)
+        selected.append(indices[ordered[:count]])
     return torch.cat(selected)
 
 
@@ -54,8 +57,10 @@ def refresh_statistics(model, target_loader, source_prototypes, supports, ridge,
     ids = torch.cat(ids)
     labels, distances = nearest_guides(features, guides)
     count = len(guides)
-    prototypes = fit_gaussians(features, labels, count, ridge, fallback_means=guides)
-    selected = confident_indices(labels, distances, count, fraction)
+    modified = model.preset == "friend"
+    prototypes = fit_gaussians(features, labels, count, ridge, fallback_means=guides,
+                               shrink=0.1 if modified else None)
+    selected = confident_indices(labels, distances, count, fraction, minimum_one=modified)
     return TargetStatistics(
         prototypes, ids[selected.cpu()], labels[selected].cpu(), labels.bincount(minlength=count).cpu()
     )

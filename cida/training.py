@@ -2,6 +2,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import islice
 import json
+import math
+import random
 
 import torch
 from torch.nn import functional as F
@@ -14,6 +16,7 @@ from .prototypes import fit_gaussians, sample_negatives, separability_loss
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    preset: str = "baseline"
     epochs: int = 10
     batch_size: int = 64
     lr: float = 1e-4
@@ -68,8 +71,8 @@ def source_statistics(model, data_loader, device, ridge):
         features.append(model.f_s(images.to(device)))
         labels.append(targets.to(device))
     features, labels = torch.cat(features), torch.cat(labels)
-    prototypes = fit_gaussians(features, labels, model.num_shared, ridge)
-    global_prototype = fit_gaussians(features, torch.zeros_like(labels), 1, ridge)
+    prototypes = fit_gaussians(features, labels, model.num_shared, ridge, shrink=0.1 if model.preset == "friend" else None)
+    global_prototype = fit_gaussians(features, torch.zeros_like(labels), 1, ridge, shrink=0.1 if model.preset == "friend" else None)
     return prototypes, global_prototype
 
 
@@ -152,6 +155,11 @@ def confidence_batches(target, stats, config, steps, epoch):
     if len(stats.selected_ids) == 0:
         return iter(())
     dataset = ConfidentTarget(target, stats.selected_ids, stats.selected_labels)
+    if config.preset == "friend":
+        def repeat():
+            while True:
+                yield from loader(dataset, config, shuffle=True)
+        return repeat()
     class_count = stats.selected_labels.bincount()
     weights = class_count[stats.selected_labels].double().reciprocal()
     sampler = WeightedRandomSampler(
@@ -162,7 +170,7 @@ def confidence_batches(target, stats, config, steps, epoch):
 
 
 def target_loss(name, model, stats, source_prototypes, supports, images,
-                pseudo_labels=None, gaussian_score="density"):
+                pseudo_labels=None, gaussian_score="density", la1_temperature=1.0):
     if name in {"Lr1", "Lr2"}:
         proxies, labels = proxy_batch(source_prototypes, len(images), supports.dtype)
         projected = model.f_e(proxies)
@@ -170,22 +178,40 @@ def target_loss(name, model, stats, source_prototypes, supports, images,
             return F.cross_entropy(model.joint_logits(projected), labels)
         return squared_distance(model.f_d(projected), proxies)
 
-    features = model.f_t(images)
+    if model.preset == "friend" and name in {"La1", "La2"}:
+        combined = model.f_t(torch.cat((images, supports)))
+        features, private = combined[:len(images)], combined[len(images):]
+        guides = torch.cat((model.f_e(source_prototypes.means.to(supports)), private))
+    else:
+        features = model.f_t(images)
+        guides = None
     if name == "Lc":
         return F.cross_entropy(model.joint_logits(features), pseudo_labels)
     if name == "La1":
         with torch.no_grad():
-            guides = build_guides(model, source_prototypes, supports)
+            if guides is None:
+                guides = build_guides(model, source_prototypes, supports)
             pseudo_labels, _ = nearest_guides(features, guides)
-        return separability_loss(features, pseudo_labels, stats.prototypes, gaussian_score)
+        return separability_loss(features, pseudo_labels, stats.prototypes, gaussian_score,
+                                 temperature=la1_temperature)
     if name == "La2":
-        guides = build_guides(model, source_prototypes, supports)
+        if guides is None:
+            guides = build_guides(model, source_prototypes, supports)
         return squared_distance(features, guides[pseudo_labels])
     raise ValueError(f"Unknown target loss {name}.")
 
 
 def train_target(model, target, supports, source_prototypes, config, projection_steps,
-                 fraction=0.2, *, stats_target=None, disable_guide_pulling=False):
+                 fraction=0.2, *, stats_target=None, disable_guide_pulling=False, disable_separability=False,
+                 la1_samples="all", la1_temperature=1.0, epoch_callback=None):
+    if la1_samples not in {"all", "confident"}:
+        raise ValueError("la1_samples must be all or confident")
+    if not math.isfinite(la1_temperature) or la1_temperature <= 0:
+        raise ValueError("la1_temperature must be finite and positive")
+    if la1_temperature != 1 and config.gaussian_score != "log-density":
+        raise ValueError("La1 temperature scaling requires log-density scores")
+    if config.preset == "friend":
+        recalibrate_batchnorm(model.f_t, loader(target if stats_target is None else stats_target, config), supports.device)
     history = [warmup_projections(model, source_prototypes, config, projection_steps)]
     target_loader = loader(target, config, shuffle=True)
     stats_loader = loader(target if stats_target is None else stats_target, config)
@@ -193,34 +219,92 @@ def train_target(model, target, supports, source_prototypes, config, projection_
     order = tuple(optimizers)
     step = 0
     stats = refresh_statistics(model, stats_loader, source_prototypes, supports, config.cov_ridge, fraction)
+
+    def report(epoch):
+        if epoch_callback is None:
+            return None
+        # Diagnostic evaluation must not change training randomness, BatchNorm
+        # statistics, or train/eval modes; target labels never enter a loss.
+        modes = {module: module.training for module in model.modules()}
+        python_rng = random.getstate()
+        devices = [supports.device.index or 0] if supports.is_cuda else []
+        try:
+            with torch.random.fork_rng(devices=devices), torch.inference_mode():
+                model.eval()
+                return epoch_callback(epoch, model, stats)
+        finally:
+            random.setstate(python_rng)
+            for module, mode in modes.items():
+                module.training = mode
+
+    initial_metrics = report(0)
+    if initial_metrics is not None:
+        history.append({"stage": "target_initialization", "epoch": 0, "metrics": initial_metrics})
     for epoch in range(1, config.epochs + 1):
         model.train()
         totals, steps = defaultdict(float), defaultdict(int)
-        step_count = min(config.max_steps or len(target_loader), len(target_loader))
+        epoch_updates = len(target_loader) * (5 if config.preset == "friend" else 1)
+        step_count = min(config.max_steps or epoch_updates, epoch_updates)
         confident = confidence_batches(target, stats, config, step_count, epoch)
-        for images, _ in batches(target_loader, config.max_steps):
+        # Separate iterator keeps Lc/La2's draw sequence independent of whether
+        # La1 uses all targets or B_t. La1 recomputes nearest-guide labels.
+        la1_confident = (confidence_batches(target, stats, config, step_count, epoch + 100000)
+                         if la1_samples == "confident" else None)
+        def epoch_batches():
+            remaining = step_count
+            while remaining:
+                for batch in target_loader:
+                    yield batch
+                    remaining -= 1
+                    if remaining == 0:
+                        return
+        for images, _ in epoch_batches():
             name = order[step % len(order)]
             step += 1
             labels = None
-            if name in {"Lc", "La2"}:
+            if name in {"Lc", "La2"} or (name == "La1" and la1_samples == "confident"):
                 if len(stats.selected_ids) == 0:
                     continue
-                images, labels = next(confident)
+                images, labels = next(la1_confident if name == "La1" else confident)
                 labels = labels.to(supports.device)
             # Retain the five-slot schedule and consume the same confident
             # batch so the other losses keep their baseline update budgets.
-            if name == "La2" and disable_guide_pulling:
+            if (name == "La2" and disable_guide_pulling) or (name == "La1" and disable_separability):
                 continue
             loss = target_loss(
                 name, model, stats, source_prototypes, supports, images.to(supports.device),
-                labels, config.gaussian_score,
+                labels, config.gaussian_score, la1_temperature=la1_temperature,
             )
             totals[name] += update(model, optimizers[name], loss)
             steps[name] += 1
-        history.append(log_epoch(
-            "target", epoch, totals, steps, pseudo_label_counts=stats.counts.tolist(),
-            confident_count=len(stats.selected_ids), updates=dict(steps),
-            disabled_losses=["La2"] if disable_guide_pulling else [],
-        ))
+        previous_counts = stats.counts.tolist()
+        previous_confident_count = len(stats.selected_ids)
         stats = refresh_statistics(model, stats_loader, source_prototypes, supports, config.cov_ridge, fraction)
+        metrics = report(epoch)
+        history.append(log_epoch(
+            "target", epoch, totals, steps, pseudo_label_counts=previous_counts,
+            confident_count=previous_confident_count, updates=dict(steps),
+            next_pseudo_label_counts=stats.counts.tolist(),
+            la1_samples=la1_samples, la1_temperature=la1_temperature,
+            **({"metrics": metrics} if metrics is not None else {}),
+            disabled_losses=(["La2"] if disable_guide_pulling else []) + (["La1"] if disable_separability else []),
+        ))
     return history
+
+
+@torch.no_grad()
+def recalibrate_batchnorm(module, data_loader, device):
+    layers = [m for m in module.modules() if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
+    momenta = [m.momentum for m in layers]
+    was_training = module.training
+    try:
+        for layer in layers:
+            layer.reset_running_stats()
+            layer.momentum = None
+        module.train()
+        for images, _ in data_loader:
+            module(images.to(device))
+    finally:
+        for layer, momentum in zip(layers, momenta):
+            layer.momentum = momentum
+        module.train(was_training)

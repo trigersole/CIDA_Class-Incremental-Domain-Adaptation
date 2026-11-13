@@ -15,7 +15,7 @@ from cida.data import PRIVATE, SHARED, digits, source_dataset, target_data, targ
 from cida.guides import build_guides, confident_indices, nearest_guides
 from cida.models import AdaptationModel, SourceModel
 from cida.prototypes import GaussianBank, fit_gaussians, negative_mask, sample_negatives, separability_loss
-from cida.training import TrainingConfig, loader, optimizer_for, proxy_batch, squared_distance, update
+from cida.training import TrainingConfig, loader, optimizer_for, proxy_batch, squared_distance, update, recalibrate_batchnorm
 
 
 def prediction_report(predictions, labels, classes=10):
@@ -110,7 +110,7 @@ def target_report(model, source_bank, supports, features, labels, fraction=0.2, 
         if bool((assigned[confident] == c).any()) else None
         for c in range(len(guides))
     ]
-    bank = fit_gaussians(features, assigned, len(guides), ridge, fallback_means=guides)
+    bank = fit_gaussians(features, assigned, len(guides), ridge, fallback_means=guides, shrink=0.1 if model.preset == "friend" else None)
     result["assignment_counts"] = assigned.bincount(minlength=len(guides)).tolist()
     result["empty_classes"] = (assigned.bincount(minlength=len(guides)) == 0).nonzero().flatten().tolist()
     # Re-enable autograd for a feature-only probe. Target labels are NEVER
@@ -155,13 +155,16 @@ def main():
     protocol = args.protocol or (target_checkpoint["protocol"] if target_checkpoint else "held-out")
     if target_checkpoint is not None and protocol != target_checkpoint["protocol"]:
         parser.error("--protocol must match --target-checkpoint")
-    config = TrainingConfig(batch_size=args.batch_size or 64, workers=args.workers, seed=args.seed)
-    source = SourceModel(5).to(device)
+    preset = source_checkpoint.get("config", {}).get("preset", "baseline")
+    if target_checkpoint is not None and target_checkpoint.get("config", {}).get("preset", "baseline") != preset:
+        parser.error("Source and target checkpoints must use the same preset")
+    config = TrainingConfig(batch_size=args.batch_size or 64, workers=args.workers, seed=args.seed, preset=preset)
+    source = SourceModel(5, preset=preset).to(device)
     source.load_state_dict(source_checkpoint["model"])
     source.eval()
     bank = GaussianBank(**{name: tensor.to(device) for name, tensor in source_checkpoint["prototypes"].items()})
-    training_data = source_dataset(args.data, args.download)
-    source_test = digits("mnist", args.data, False, args.download)
+    training_data = source_dataset(args.data, args.download, preset)
+    source_test = digits("mnist", args.data, False, args.download, preset)
     indices = [i for i, label in enumerate(source_test.targets) if int(label) in SHARED]
     source_test = Subset(source_test, indices)
     source_features, source_labels = collect(source.f_s, training_data, config, device)
@@ -176,12 +179,14 @@ def main():
         "test_prototypes": gaussian_report(test_features, test_labels, bank),
     }, args.output)
     seed_all(args.seed)
-    target, supports, support_ids = target_data(args.data, args.download, protocol, args.seed)
+    target, supports, support_ids = target_data(args.data, args.download, protocol, args.seed, preset)
     supports = supports.to(device)
     if target_checkpoint is not None and support_ids != target_checkpoint["support_ids"]:
         parser.error("Current target data/support IDs differ from the saved run")
     model = AdaptationModel(source, 5).to(device)
     target_labels = torch.as_tensor(target.dataset.targets, device=device)[target.indices]
+    if preset == "friend":
+        recalibrate_batchnorm(model.f_t, loader(target, config), device)
     target_features, _ = collect(model.f_t, target, config, device)
     report["support_ids"] = support_ids
     with torch.no_grad():
@@ -200,7 +205,7 @@ def main():
     with torch.random.fork_rng(devices=[device.index or 0] if device.type == "cuda" else []):
         fixed_proxy, proxy_labels = proxy_batch(bank, 512, supports.dtype)
         global_bank = fit_gaussians(source_features, torch.zeros_like(source_labels), 1,
-                                    source_checkpoint["config"]["cov_ridge"])
+                                    source_checkpoint["config"]["cov_ridge"], shrink=0.1 if preset == "friend" else None)
         negatives = sample_negatives(global_bank, bank, 512).to(supports)
         scores = bank.log_density(negatives)
         peaks = bank.log_density(bank.means).diagonal()
@@ -233,7 +238,7 @@ def main():
             model, bank, supports, features, target_labels,
             fraction=target_checkpoint["config"]["confidence_fraction"],
             ridge=target_checkpoint["config"]["cov_ridge"]), args.output)
-        test = target_evaluation(args.data, args.download, protocol, support_ids)
+        test = target_evaluation(args.data, args.download, protocol, support_ids, preset)
         features, labels = collect(model.f_t, test, config, device)
         emit(report, "saved_target_evaluation", prediction_report(model.joint_logits(features).argmax(1), labels), args.output)
     print(f"Saved diagnostics to {args.output}")

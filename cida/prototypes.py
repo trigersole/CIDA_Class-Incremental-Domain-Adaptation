@@ -31,7 +31,7 @@ class GaussianBank:
 
 
 @torch.no_grad()
-def fit_gaussians(features, labels, num_classes, ridge, fallback_means=None):
+def fit_gaussians(features, labels, num_classes, ridge, fallback_means=None, shrink=None):
     """Fit empirical full covariance plus ridge I. Sparse classes use pooled covariance."""
     if len(features) < 2 or ridge <= 0:
         raise ValueError("Gaussian fitting needs at least two features and a positive ridge.")
@@ -51,14 +51,23 @@ def fit_gaussians(features, labels, num_classes, ridge, fallback_means=None):
             centered = members - mean
             covariance = centered.T @ centered / (len(members) - 1)
         means.append(mean)
-        covariances.append(covariance + regularizer)
+        if shrink is None:
+            covariances.append(covariance + regularizer)
+        else:
+            scale = covariance.diagonal().mean().clamp_min(1e-8)
+            eye = torch.eye(dimension, dtype=features.dtype, device=features.device)
+            covariances.append((1 - shrink) * covariance + (shrink + 1e-4) * scale * eye)
     return GaussianBank(torch.stack(means), torch.linalg.cholesky(torch.stack(covariances)))
 
 
-def separability_loss(features, labels, prototypes, score="density"):
+def separability_loss(features, labels, prototypes, score="density", temperature=1.0):
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError("Gaussian logit temperature must be finite and positive.")
+    if temperature != 1.0 and score != "log-density":
+        raise ValueError("Temperature scaling requires log-density scores.")
     log_density = prototypes.log_density(features)
     if score == "log-density":
-        return F.cross_entropy(log_density, labels)
+        return F.cross_entropy(log_density / temperature, labels)
     # Shift in log space before exponentiating. This computes density(c) -
     # max_c density(c) with expm1, avoiding cancellation for close scores.
     max_log_density = log_density.max(dim=1, keepdim=True).values

@@ -20,7 +20,8 @@ def main():
     benchmark = checkpoint.get("benchmark", "digits")
     num_shared = len(checkpoint["shared_classes"])
     num_private = len(checkpoint["private_classes"])
-    model = AdaptationModel(SourceModel(num_shared, benchmark), num_private).to(device)
+    preset = checkpoint.get("config", {}).get("preset", "baseline")
+    model = AdaptationModel(SourceModel(num_shared, benchmark, preset=preset), num_private).to(device)
     model.load_state_dict(checkpoint["model"])
     if benchmark == "office31":
         if args.download:
@@ -28,7 +29,7 @@ def main():
         test = office_evaluation(args.data, checkpoint["target_domain"], checkpoint["shared_classes"],
                                  checkpoint["private_classes"], checkpoint["support_ids"])
     else:
-        test = target_evaluation(args.data, args.download, checkpoint["protocol"], checkpoint["support_ids"])
+        test = target_evaluation(args.data, args.download, checkpoint["protocol"], checkpoint["support_ids"], preset)
     config = TrainingConfig(batch_size=args.batch_size or default_batch_size(benchmark), workers=args.workers)
     print(json.dumps(evaluate(model, loader(test, config), device, num_shared, num_shared + num_private), indent=2))
 

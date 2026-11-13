@@ -35,9 +35,9 @@ def main():
     if office:
         dataset, stats_dataset, shared = office_source(args.data, args.domain, args.office_shared)
     else:
-        dataset, stats_dataset, shared = source_dataset(args.data, args.download), None, SHARED
+        dataset, stats_dataset, shared = source_dataset(args.data, args.download, config.preset), None, SHARED
     pretrained = office and args.office_weights == "imagenet"
-    model = SourceModel(len(shared), args.benchmark, pretrained=pretrained).to(device)
+    model = SourceModel(len(shared), args.benchmark, pretrained=pretrained, preset=config.preset).to(device)
     prototypes, history = train_source(model, dataset, config, device, args.sigma, stats_dataset=stats_dataset)
     save_checkpoint(args.output, {
         "version": 1, "stage": "source", "shared_classes": shared,

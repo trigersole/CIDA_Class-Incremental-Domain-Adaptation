@@ -9,20 +9,21 @@ PRIVATE = (5, 6, 7, 8, 9)
 CLASSES = SHARED + PRIVATE
 
 
-def digits(name, root, train, download):
+def digits(name, root, train, download, preset="baseline"):
     from torchvision import datasets, transforms
 
     transform = transforms.Compose([
         transforms.Resize((32, 32)),
         transforms.Grayscale(num_output_channels=3),
         transforms.ToTensor(),
+        *([transforms.Normalize((0.5,) * 3, (0.5,) * 3)] if preset == "friend" else []),
     ])
     dataset_type = {"mnist": datasets.MNIST, "usps": datasets.USPS}[name]
     return dataset_type(str(Path(root) / name), train=train, transform=transform, download=download)
 
 
-def source_dataset(root, download):
-    source = digits("mnist", root, train=True, download=download)
+def source_dataset(root, download, preset="baseline"):
+    source = digits("mnist", root, train=True, download=download, **({"preset": preset} if preset != "baseline" else {}))
     labels = torch.as_tensor(source.targets)
     return Subset(source, torch.isin(labels, torch.tensor(SHARED)).nonzero(as_tuple=True)[0].tolist())
 
@@ -56,8 +57,8 @@ class ConfidentTarget(Dataset):
         return image, self.pseudo_labels[index]
 
 
-def target_data(root, download, protocol, seed):
-    target = digits("usps", root, train=(protocol == "held-out"), download=download)
+def target_data(root, download, protocol, seed, preset="baseline"):
+    target = digits("usps", root, train=(protocol == "held-out"), download=download, **({"preset": preset} if preset != "baseline" else {}))
     labels = torch.as_tensor(target.targets)
     rng = torch.Generator().manual_seed(seed)
     support_ids = []
@@ -70,8 +71,8 @@ def target_data(root, download, protocol, seed):
     return unlabeled, supports, support_ids
 
 
-def target_evaluation(root, download, protocol, support_ids):
-    test = digits("usps", root, train=False, download=download)
+def target_evaluation(root, download, protocol, support_ids, preset="baseline"):
+    test = digits("usps", root, train=False, download=download, **({"preset": preset} if preset != "baseline" else {}))
     if protocol == "transductive":
         support_set = set(support_ids)
         return Subset(test, [i for i in range(len(test)) if i not in support_set])
