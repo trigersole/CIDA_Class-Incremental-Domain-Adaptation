@@ -82,6 +82,11 @@ def projection_report(model, samples, labels):
         "cycle_relative_mse": float((reconstructed - samples).square().sum() / energy),
         "proxy_accuracy_before_projection": float(100 * (model.g_s(samples).argmax(1) == labels).float().mean()),
         "proxy_accuracy_after_projection": float(100 * (model.joint_logits(encoded).argmax(1) == labels).float().mean()),
+        "proxy_source_head_after_projection": float(
+            100 * (model.g_s(reconstructed).argmax(1) == labels).float().mean()),
+        "proxy_shared_only_after_projection": float(
+            100 * (model.g_s(reconstructed)[:, :model.num_shared].argmax(1) == labels).float().mean()),
+        "joint_prediction_note": "The joint metric includes the private head, which is random before adaptation.",
     }
 
 
@@ -96,6 +101,15 @@ def target_report(model, source_bank, supports, features, labels, fraction=0.2, 
               "confident_count": len(confident),
               "confident_precision": (float(100 * (assigned[confident] == labels[confident]).float().mean())
                                       if len(confident) else None)}
+    shared_mask = labels < model.num_shared
+    shared_only, _ = nearest_guides(features[shared_mask], guides[:model.num_shared])
+    result["shared_guides_without_private_competition"] = prediction_report(
+        shared_only, labels[shared_mask], model.num_shared)
+    result["confident_precision_by_assigned_class"] = [
+        float(100 * (labels[confident[assigned[confident] == c]] == c).float().mean())
+        if bool((assigned[confident] == c).any()) else None
+        for c in range(len(guides))
+    ]
     bank = fit_gaussians(features, assigned, len(guides), ridge, fallback_means=guides)
     result["assignment_counts"] = assigned.bincount(minlength=len(guides)).tolist()
     result["empty_classes"] = (assigned.bincount(minlength=len(guides)) == 0).nonzero().flatten().tolist()
@@ -170,6 +184,18 @@ def main():
     target_labels = torch.as_tensor(target.dataset.targets, device=device)[target.indices]
     target_features, _ = collect(model.f_t, target, config, device)
     report["support_ids"] = support_ids
+    with torch.no_grad():
+        shared = target_labels < len(SHARED)
+        baseline_logits = source.g_s(target_features[shared])
+        emit(report, "unadapted_usps_shared_baseline", {
+            "source_head_with_unknown": prediction_report(
+                baseline_logits.argmax(1), target_labels[shared], len(SHARED) + 1),
+            "source_head_shared_only": prediction_report(
+                baseline_logits[:, :len(SHARED)].argmax(1), target_labels[shared], len(SHARED)),
+            "nearest_source_mean": prediction_report(
+                torch.cdist(target_features[shared].double(), bank.means).argmin(1),
+                target_labels[shared], len(SHARED)),
+        }, args.output)
     # fork_rng keeps probes from changing the projection experiment's RNG.
     with torch.random.fork_rng(devices=[device.index or 0] if device.type == "cuda" else []):
         fixed_proxy, proxy_labels = proxy_batch(bank, 512, supports.dtype)

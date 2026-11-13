@@ -146,9 +146,27 @@ class CidaTests(unittest.TestCase):
         result = projection_report(model, torch.randn(8, 100), torch.arange(8) % 5)
         for key in ("encoder_relative_mse", "decoder_relative_mse", "cycle_relative_mse"):
             self.assertEqual(result[key], 0.)
+        self.assertEqual(result["proxy_accuracy_before_projection"],
+                         result["proxy_source_head_after_projection"])
         score = prediction_report(torch.tensor([0, 0, 1]), torch.tensor([0, 1, 1]), 3)
         self.assertEqual(score["per_class"], [100., 50., None])
         self.assertEqual(score["macro_accuracy"], 75.)
+
+    def test_projection_diagnostic_separates_random_private_head(self):
+        model = AdaptationModel(SourceModel(5), 5)
+        model.f_e = torch.nn.Identity()
+        model.f_d = torch.nn.Identity()
+        with torch.no_grad():
+            for parameter in model.g_s.parameters():
+                parameter.zero_()
+            model.g_s[-1].bias[0] = 1.
+            for parameter in model.g_t.parameters():
+                parameter.zero_()
+            model.g_t[-1].bias[0] = 100.
+        report = projection_report(model, torch.randn(4, 100), torch.zeros(4, dtype=torch.long))
+        self.assertEqual(report["proxy_accuracy_before_projection"], 100.)
+        self.assertEqual(report["proxy_source_head_after_projection"], 100.)
+        self.assertEqual(report["proxy_accuracy_after_projection"], 0.)
 
 
 if __name__ == "__main__":
