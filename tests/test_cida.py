@@ -15,6 +15,7 @@ from cida.models import AdaptationModel, SourceModel
 from cida.office import office_classes, office_trial
 from cida.prototypes import GaussianBank, fit_gaussians, negative_mask, separability_loss
 from cida.training import target_loss, target_optimizers, update
+from debug_digits import gaussian_report, prediction_report, projection_report
 
 
 class CidaTests(unittest.TestCase):
@@ -129,6 +130,25 @@ class CidaTests(unittest.TestCase):
                 self.assertTrue(set(support_ids).isdisjoint(test.indices))
                 self.assertEqual({test[i][1] for i in range(len(test))},
                                  set(range(shared_count + private_count)))
+
+    def test_diagnostic_exposes_negligible_density_gradients(self):
+        means = torch.stack((torch.zeros(100), torch.full((100,), 3.))).double()
+        bank = GaussianBank(means, torch.eye(100, dtype=torch.double).repeat(2, 1, 1) * 10)
+        result = gaussian_report(means.float(), torch.tensor([0, 1]), bank)
+        self.assertAlmostEqual(result["gradient_probe"]["density"]["loss"], 0.6931471805599453)
+        self.assertLess(result["gradient_probe"]["density"]["feature_gradient_norm"], 1e-100)
+        self.assertGreater(result["gradient_probe"]["log-density"]["feature_gradient_norm"], 1e-5)
+
+    def test_diagnostic_projection_error_has_relative_scale(self):
+        model = AdaptationModel(SourceModel(5), 5)
+        model.f_e = torch.nn.Identity()
+        model.f_d = torch.nn.Identity()
+        result = projection_report(model, torch.randn(8, 100), torch.arange(8) % 5)
+        for key in ("encoder_relative_mse", "decoder_relative_mse", "cycle_relative_mse"):
+            self.assertEqual(result[key], 0.)
+        score = prediction_report(torch.tensor([0, 0, 1]), torch.tensor([0, 1, 1]), 3)
+        self.assertEqual(score["per_class"], [100., 50., None])
+        self.assertEqual(score["macro_accuracy"], 75.)
 
 
 if __name__ == "__main__":

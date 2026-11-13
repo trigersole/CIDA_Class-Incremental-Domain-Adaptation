@@ -50,6 +50,18 @@ done
 
 Office evaluation uses the transductive target pool with the one-shot supports removed from adaptation and scoring. Every scored image participates in adaptation as an unlabeled example. Source training and target adaptation can also read separate dataset roots containing only their respective domains.
 
+## Debug a Digits run before retraining
+
+Use the existing source and target checkpoints to measure where information is lost. The command writes `report.json` after each stage. It reports source training and held-out test accuracy, Gaussian scores and feature gradients, covariance eigenvalues, synthetic negative checks, projection reconstruction error on fixed proxy samples, guide/confidence precision on the adaptation pool, and the saved target model's test accuracy.
+
+```bash
+python debug_digits.py --download --device cuda --data /kaggle/working/data/digits --source /kaggle/working/runs/digits/source.pt --target-checkpoint /kaggle/working/runs/digits/mnist_to_usps/seed_0.pt --seed 0 --output /kaggle/working/runs/digits_debug/density.json
+```
+
+To inspect the log-density experiment, change both checkpoint paths to their `digits_logdensity` counterparts and use a separate report path. Reproduce the adaptation run's batch size using `--batch-size` if it differs from 64. The diagnostic uses the target checkpoint's protocol and checks that its support IDs match. It compares fixed-step projection warmup with an optional extension, e.g. `--projection-max-steps 5000`, using the same optimizer state and held-out proxy samples. Projection updates affect only a temporary diagnostic model. Existing checkpoints are read only. True target labels are used for diagnostic scoring and never enter an optimization loss. Keep final test results separate from any validation data used to select hyperparameters.
+
+The original density objective produced near-uniform losses in the supplied Kaggle runs. The log-density variant lowered accuracy. These are unresolved reproduction issues. This command gathers evidence for the next correction without changing either objective. The negative report also distinguishes the supplement algorithm's maximum-density-class check from the prose requirement to be outside every class's 3-sigma region.
+
 ## Implementation map
 
 | Paper component | Code |
