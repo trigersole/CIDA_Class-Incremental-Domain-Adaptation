@@ -185,7 +185,7 @@ def target_loss(name, model, stats, source_prototypes, supports, images,
 
 
 def train_target(model, target, supports, source_prototypes, config, projection_steps,
-                 fraction=0.2, *, stats_target=None):
+                 fraction=0.2, *, stats_target=None, disable_guide_pulling=False):
     history = [warmup_projections(model, source_prototypes, config, projection_steps)]
     target_loader = loader(target, config, shuffle=True)
     stats_loader = loader(target if stats_target is None else stats_target, config)
@@ -207,6 +207,10 @@ def train_target(model, target, supports, source_prototypes, config, projection_
                     continue
                 images, labels = next(confident)
                 labels = labels.to(supports.device)
+            # Retain the five-slot schedule and consume the same confident
+            # batch so the other losses keep their baseline update budgets.
+            if name == "La2" and disable_guide_pulling:
+                continue
             loss = target_loss(
                 name, model, stats, source_prototypes, supports, images.to(supports.device),
                 labels, config.gaussian_score,
@@ -216,6 +220,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
         history.append(log_epoch(
             "target", epoch, totals, steps, pseudo_label_counts=stats.counts.tolist(),
             confident_count=len(stats.selected_ids), updates=dict(steps),
+            disabled_losses=["La2"] if disable_guide_pulling else [],
         ))
         stats = refresh_statistics(model, stats_loader, source_prototypes, supports, config.cov_ridge, fraction)
     return history

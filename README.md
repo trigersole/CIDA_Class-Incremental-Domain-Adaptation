@@ -52,6 +52,8 @@ Office evaluation uses the transductive target pool with the one-shot supports r
 
 ## Debug a Digits run before retraining
 
+Use `--disable-guide-pulling` with `adapt_target.py` for the next controlled ablation. This skips `La2` in its original update slots and retains the other losses' update budgets and confident-batch consumption. The checkpoint config and metrics JSON record the ablation. This is a diagnostic experiment, with no improvement in accuracy assumed in advance.
+
 Use the existing source and target checkpoints to measure where information is lost. The command writes `report.json` after each stage. It reports source training and held-out test accuracy, Gaussian scores and feature gradients, covariance eigenvalues, synthetic negative checks, projection reconstruction error on fixed proxy samples, guide/confidence precision on the adaptation pool, and the saved target model's test accuracy.
 
 ```bash

@@ -26,6 +26,8 @@ def main():
                         help="Defaults to held-out for Digits and transductive for Office-31.")
     parser.add_argument("--projection-steps", type=positive_int, default=1000)
     parser.add_argument("--confidence-fraction", type=float, default=0.2)
+    parser.add_argument("--disable-guide-pulling", action="store_true",
+                        help="Ablation: skip La2 while retaining all other update slots.")
     parser.add_argument("--seeds", type=int, nargs="+", help="Run independent one-shot trials.")
     args = parser.parse_args()
     if not 0 < args.confidence_fraction <= 1:
@@ -71,6 +73,7 @@ def main():
         history = train_target(
             model, target, supports.to(device), prototypes, trial,
             args.projection_steps, args.confidence_fraction, stats_target=stats_target,
+            disable_guide_pulling=args.disable_guide_pulling,
         )
         metrics = evaluate(model, loader(test, trial), device, len(shared), len(shared) + len(private))
         result = {"seed": seed, "support_ids": support_ids, **metrics}
@@ -80,12 +83,14 @@ def main():
             "benchmark": benchmark, "source_domain": source_domain, "target_domain": args.target_domain,
             "model": model.state_dict(), "protocol": protocol, "support_ids": support_ids,
             "config": {**asdict(trial), "projection_steps": args.projection_steps,
-                       "confidence_fraction": args.confidence_fraction},
+                       "confidence_fraction": args.confidence_fraction,
+                       "disable_guide_pulling": args.disable_guide_pulling},
             "history": history, "metrics": metrics,
         })
         print(json.dumps(result), flush=True)
         del model
     summary = {"benchmark": benchmark, "source_domain": source_domain, "target_domain": args.target_domain,
+               "disabled_losses": ["La2"] if args.disable_guide_pulling else [],
                "shared_classes": shared, "private_classes": private, "protocol": protocol,
                "source_checkpoint": str(args.source), "trials": results}
     for key in ("ALL", "PRIV", "SHARED"):
