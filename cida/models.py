@@ -59,9 +59,9 @@ def classifier(outputs, benchmark="digits", preset="baseline"):
 
 
 class ResidualProjection(nn.Module):
-    def __init__(self):
+    def __init__(self, dimension=100):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(100, 100), nn.LeakyReLU(0.2), nn.Linear(100, 100))
+        self.net = nn.Sequential(nn.Linear(dimension, dimension), nn.LeakyReLU(0.2), nn.Linear(dimension, dimension))
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
 
@@ -71,7 +71,7 @@ class ResidualProjection(nn.Module):
 
 def projector(benchmark="digits", preset="baseline"):
     if preset == "friend":
-        return ResidualProjection()
+        return ResidualProjection(OFFICE_FEATURE_DIM if benchmark == "office31" else FEATURE_DIM)
     if benchmark == "office31":
         return nn.Sequential(*(
             layer for _ in range(3)
@@ -88,8 +88,8 @@ class SourceModel(nn.Module):
         super().__init__()
         self.num_shared = num_shared
         self.benchmark = benchmark
-        if preset not in {"baseline", "friend"} or (preset == "friend" and benchmark != "digits"):
-            raise ValueError("The friend preset currently supports Digits only.")
+        if preset not in {"baseline", "friend"}:
+            raise ValueError("Unknown training preset.")
         self.preset = preset
         self.f_s = feature_extractor(benchmark, pretrained, preset)
         self.g_s = classifier(num_shared + 1, benchmark, preset)

@@ -91,9 +91,12 @@ The original density objective produced near-uniform losses in the supplied Kagg
 `--preset friend` adopts the main numerical and initialization changes inspected in
 nikita-bachhas/CIDA-reimplementation at commit 03bc2e5. This is an experimental
 variant, not a claim of exact paper reproduction or guaranteed higher accuracy.
-The baseline remains the default. Office is unchanged; this preset accepts Digits only.
+The baseline remains the default. The preset also supports Office-31; see
+[KAGGLE_OFFICE_FRIEND.md](KAGGLE_OFFICE_FRIEND.md) for a complete five-seed runner.
+Office keeps its ResNet-50 feature/classifier heads and ImageNet preprocessing,
+with 256-dimensional residual projections and the same adaptation safeguards.
 
-The preset uses inputs normalized to [-1,1], convolutional BatchNorm, LeakyReLU
+For Digits, the preset uses inputs normalized to [-1,1], convolutional BatchNorm, LeakyReLU
 slope 0.2, residual projections initialized to the identity with linear outputs,
 source and target covariance shrinkage (0.9*Sigma + 0.1001*mean(diag(Sigma))*I),
 log-density Gaussian logits, and target BatchNorm recalibration before adaptation.
@@ -103,8 +106,9 @@ without class balancing. Each adaptation epoch has five times the baseline updat
 budget, so each loss receives approximately one target-loader pass of updates.
 `--max-steps` caps TOTAL optimizer slots per epoch in both presets.
 
-Train a NEW source: old source weights do not contain BatchNorm or the new
-preprocessing. Checkpoints record the preset; adaptation and evaluation restore it
+Train a NEW source: old Digits weights lack the changed BatchNorm/preprocessing;
+Office source training uses different Gaussian covariance regularization.
+Checkpoints record the preset; adaptation and evaluation restore it
 automatically. An explicit incompatible adaptation preset is rejected. Use separate
 output directories so previous results are retained.
 
