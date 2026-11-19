@@ -1,5 +1,27 @@
 # Office-31 on a campus Slurm cluster
 
+## Simple submission (use this on CCDS-TC2)
+
+Run from the repository root after the uv setup and dataset extraction:
+
+```bash
+sbatch office.slurm
+```
+
+`office.slurm` is a standalone batch script: direct `.venv/bin/python` commands
+run source training then seeds 0-4 sequentially inside one GPU allocation, followed
+by the combined summary. No submission helper, `srun`, Python execution wrapper,
+or job array is involved. It uses your observed partition `MGPU-TC2`, one GPU,
+four CPUs, 32G RAM, and six hours. Logs are `office-JOBID.out` and
+`office-JOBID.err` in the repository root. Model/input/output device logging remains
+enabled. Training settings and the existing output folder are unchanged.
+
+The six-hour limit still applies. Resubmitting skips completed source/seeds;
+an interrupted stage restarts. This simpler launch removes the earlier job-step
+layer, but has not been verified live on campus and does not establish the cause
+of previous SIGKILLs. The sections below also document the earlier helper scripts;
+use the direct `sbatch office.slurm` command for the simple launch.
+
 This runs Amazon-to-DSLR with 20 shared and 11 private classes, the new Office
 three-layer FC+ELU residual projections, and La1 disabled. Digits is unchanged.
 

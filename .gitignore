@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 logs/
+office-*.out
+office-*.err
 runs/
 .cache/
 .venv/
