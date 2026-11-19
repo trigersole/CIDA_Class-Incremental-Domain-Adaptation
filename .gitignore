@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+logs/
+runs/
+.cache/
+.venv/
+data/office31/*/*
+!data/office31/*/.gitkeep

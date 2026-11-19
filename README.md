@@ -151,6 +151,10 @@ paper-aligned Office head rather than copying their missing FC layer.
 
 ## Controlled La1 experiments and epoch diagnostics
 
+For a campus GPU cluster (Slurm, six-hour jobs, four CPUs, 32 GB RAM), see
+[SLURM_OFFICE.md](SLURM_OFFICE.md). Put extracted Office-31 domains in
+`data/office31/` and submit with `bash scripts/slurm/submit_office.sh`.
+
 See [KAGGLE_LA1_EXPERIMENTS.md](KAGGLE_LA1_EXPERIMENTS.md) for commands comparing
 all-target La1, confident-only La1, no La1, and optional temperature scaling.
 `--la1-samples all` and `--la1-temperature 1` preserve existing loss behavior.
