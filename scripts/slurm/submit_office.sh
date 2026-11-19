@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Run from a login shell with the intended CUDA-enabled Python environment active.
+# Run after setup_office.sh; environment activation is unnecessary.
 set -Eeuo pipefail
 export CIDA_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${CIDA_REPO}"
-export CIDA_PYTHON="${CIDA_PYTHON:-$(command -v python)}"
+export CIDA_PYTHON="${CIDA_PYTHON:-${CIDA_REPO}/.venv/bin/python}"
+[[ -x "${CIDA_PYTHON}" ]] || { echo 'Run bash scripts/slurm/setup_office.sh first, or set CIDA_PYTHON to an absolute Python path.' >&2; exit 2; }
 export OFFICE_DATA="${OFFICE_DATA:-${CIDA_REPO}/data/office31}"
 export OFFICE_OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_residual3_no_la1}"
 export OFFICE_SOURCE="${OFFICE_SOURCE:-${OFFICE_OUTPUT}/source.pt}"

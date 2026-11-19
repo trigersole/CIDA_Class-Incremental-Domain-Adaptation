@@ -15,35 +15,41 @@ target training. Separate completed seeds remain available.
 
 ## Setup on the login node
 
-Activate your cluster's CUDA-enabled Python environment first (Python 3.10+).
-Use the campus module/Conda instructions for that environment. Then:
+Install uv once if it is not already available:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then clone the repository and set up its environment:
 
 ```bash
 git clone https://github.com/trigersole/CIDA_Class-Incremental-Domain-Adaptation.git
 cd CIDA_Class-Incremental-Domain-Adaptation
-python -m pip install -r requirements.txt
+bash scripts/slurm/setup_office.sh
 ```
 
-If already cloned, run `git pull --ff-only` instead. Use the existing CUDA-enabled
-PyTorch installation if your campus provides one; do not replace it with CPU-only
-PyTorch. The submit script exports the absolute active Python interpreter to jobs,
-so activate your environment before submitting. Load any required CUDA modules in
-that same shell; environment variables are exported by sbatch.
+If already cloned, run `git pull --ff-only` instead. Setup uses uv to create
+`.venv` with Python 3.11, installs torch 2.5.1 and torchvision 0.20.1 with CUDA 12.1
+wheels, and downloads the ImageNet weights. An explicit CUDA backend avoids CPU
+wheels on login nodes without GPUs. The compute nodes need an NVIDIA driver
+compatible with that PyTorch CUDA build. If your campus requires CUDA modules,
+load them before submission according to its instructions.
+
+The submit script automatically exports the absolute `.venv/bin/python` path;
+no activation, uv invocation, or package installation is needed inside GPU jobs.
+For a campus-provided environment instead, set `CIDA_PYTHON` to its absolute
+Python path. Setup must run in a Linux cluster shell; a Windows `.venv` cannot
+be copied to Linux. Keep this environment on storage shared with compute nodes.
 
 Copy your Office dataset into `data/office31/amazon/images/<class>/...` and
 `data/office31/dslr/images/<class>/...` (31 original class folders per domain).
 The intermediate `images` directory is optional. `webcam` is optional for A-to-D.
 
-Pre-download ImageNet weights on a node with Internet access, using the same
-shared cache as the jobs:
-
-```bash
-export TORCH_HOME="$PWD/.cache/torch"
-python -c 'from torchvision.models import ResNet50_Weights; ResNet50_Weights.IMAGENET1K_V1.get_state_dict(progress=True)'
-```
-
-No Internet access is needed during training once dependencies, dataset, and
-weights are present. Put the repository/data/outputs on storage accessible to
+Setup caches the ImageNet weights under `.cache/torch` (or your exported
+`TORCH_HOME`). No Internet access is needed during training once dependencies,
+dataset, and weights are present. Put the repository/data/outputs on storage accessible to
 compute nodes, not login-node-only temporary storage.
 
 ## Submit
@@ -82,7 +88,7 @@ export OFFICE_OUTPUT="/absolute/path/to/runs/office_residual3_no_la1"
 ```bash
 squeue -u "$USER"
 ls logs/
-python scripts/slurm/summarize_office.py runs/office_residual3_no_la1
+.venv/bin/python scripts/slurm/summarize_office.py runs/office_residual3_no_la1
 ```
 
 Run the final command after all five seeds complete; it refuses missing seeds or
@@ -91,11 +97,11 @@ inconsistent settings. Use your `OFFICE_OUTPUT` path if changed. It writes overa
 Each seed has independent checkpoints and epoch JSON/CSV under
 `runs/office_residual3_no_la1/target/seed_N/`. Completed trial folders are protected
 from accidental overwriting. To restart just a failed seed (for example seed 2),
-activate the same environment, set the variables below, and submit directly:
+set the variables below, and submit directly:
 
 ```bash
 export CIDA_REPO="$PWD"
-export CIDA_PYTHON="$(command -v python)"
+export CIDA_PYTHON="$PWD/.venv/bin/python"
 sbatch --array=2 scripts/slurm/office.sbatch target
 ```
 
