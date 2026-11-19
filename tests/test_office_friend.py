@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.utils.data import TensorDataset
 
-from cida.models import SourceModel, AdaptationModel
+from cida.models import SourceModel, AdaptationModel, projector
 from cida.guides import confident_indices
 from cida.training import TrainingConfig, train_source, train_target
 
@@ -27,6 +27,29 @@ class OfficeFriendTests(unittest.TestCase):
         torch.testing.assert_close(model.g_s[0].weight, source.g_s[0].weight)
         self.assertFalse(any(p.requires_grad for p in model.g_s.parameters()))
         self.assertEqual(model.joint_logits(x).shape, (4, 31))
+
+    def test_paper_office_branch_with_skip_can_learn(self):
+        projection = projector("office31", "friend")
+        self.assertEqual([type(layer) for layer in projection.net],
+                         [nn.Linear, nn.ELU] * 3)
+        self.assertTrue(all(layer.in_features == layer.out_features == 256
+                            for layer in projection.net if isinstance(layer, nn.Linear)))
+        x = torch.randn(4, 256, requires_grad=True)
+        torch.testing.assert_close(projection(x), x, rtol=0, atol=0)
+        projection(x).sum().backward()
+        torch.testing.assert_close(x.grad, torch.ones_like(x))
+        self.assertGreater(projection.net[-2].weight.grad.abs().sum().item(), 0)
+        optimizer = torch.optim.Adam(projection.parameters(), lr=1e-4)
+        optimizer.step()
+        optimizer.zero_grad()
+        projection(x).square().mean().backward()
+        self.assertGreater(projection.net[0].weight.grad.abs().sum().item(), 0)
+        self.assertFalse(torch.equal(projection(x), x))
+        # The paper-style baseline and the successful Digits preset keep their designs.
+        self.assertIsInstance(projector("office31", "baseline"), nn.Sequential)
+        digits = projector("digits", "friend")
+        self.assertEqual(len(digits.net), 3)
+        self.assertIsInstance(digits.net[1], nn.LeakyReLU)
 
     def test_office_training_and_checkpoint_roundtrip(self):
         # Substitute only the expensive CNN; keep 256-D Office heads/projections,

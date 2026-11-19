@@ -69,9 +69,28 @@ class ResidualProjection(nn.Module):
         return features + self.net(features)
 
 
+class OfficeResidualProjection(nn.Module):
+    """Supplement Table 2A's three-layer Office MLP with a full skip."""
+
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(*(
+            layer for _ in range(3)
+            for layer in (nn.Linear(OFFICE_FEATURE_DIM, OFFICE_FEATURE_DIM), nn.ELU())
+        ))
+        # ELU(0) = 0, so the complete residual projection starts as identity.
+        nn.init.zeros_(self.net[-2].weight)
+        nn.init.zeros_(self.net[-2].bias)
+
+    def forward(self, features):
+        return features + self.net(features)
+
+
 def projector(benchmark="digits", preset="baseline"):
     if preset == "friend":
-        return ResidualProjection(OFFICE_FEATURE_DIM if benchmark == "office31" else FEATURE_DIM)
+        if benchmark == "office31":
+            return OfficeResidualProjection()
+        return ResidualProjection(FEATURE_DIM)
     if benchmark == "office31":
         return nn.Sequential(*(
             layer for _ in range(3)
