@@ -10,15 +10,25 @@ export OFFICE_OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_residual3_no_la1
 export OFFICE_SOURCE="${OFFICE_SOURCE:-${OFFICE_OUTPUT}/source.pt}"
 export TORCH_HOME="${TORCH_HOME:-${CIDA_REPO}/.cache/torch}"
 mkdir -p logs "${OFFICE_OUTPUT}"
-DEPENDENCY=()
-if [[ -f "${OFFICE_SOURCE}" ]]; then
-    echo "Reusing source: ${OFFICE_SOURCE}"
-else
-    SOURCE_JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch source)
-    SOURCE_JOB="${SOURCE_JOB%%;*}"
-    echo "Source job: ${SOURCE_JOB}"
-    DEPENDENCY=("--dependency=afterok:${SOURCE_JOB}" --kill-on-invalid-dep=yes)
+# Only one submission per call, with no arrays or dependent queued jobs.
+ACTIVE=$(squeue --noheader --user="${USER}" --name=cida-office --format=%A)
+if [[ -n "${ACTIVE}" ]]; then
+    echo "An Office job is already queued/running: ${ACTIVE}"
+    echo "Wait for it to finish, then run this command again."
+    exit 0
 fi
-TARGET_JOB=$(sbatch --parsable "$@" "${DEPENDENCY[@]}" --array=0-4%1 scripts/slurm/office.sbatch target)
-echo "Target array: ${TARGET_JOB%%;*} (seeds 0-4, one at a time)"
-echo "After all five finish: ${CIDA_PYTHON} scripts/slurm/summarize_office.py '${OFFICE_OUTPUT}'"
+if [[ ! -f "${OFFICE_SOURCE}" ]]; then
+    JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch source)
+    echo "Source job: ${JOB%%;*}"
+    echo "After it finishes, run this same submit command again for seed 0."
+    exit 0
+fi
+for SEED in 0 1 2 3 4; do
+    if [[ ! -f "${OFFICE_OUTPUT}/target/seed_${SEED}/metrics.json" ]]; then
+        JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch target "${SEED}")
+        echo "Target seed ${SEED} job: ${JOB%%;*}"
+        echo "After it finishes, run this same submit command again for the next seed."
+        exit 0
+    fi
+done
+"${CIDA_PYTHON}" scripts/slurm/summarize_office.py "${OFFICE_OUTPUT}"

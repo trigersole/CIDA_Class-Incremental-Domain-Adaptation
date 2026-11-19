@@ -6,8 +6,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --time=06:00:00
-#SBATCH --output=logs/office-%A_%a.out
-#SBATCH --error=logs/office-%A_%a.err
+#SBATCH --output=logs/office-%j.out
+#SBATCH --error=logs/office-%j.err
 
 set -Eeuo pipefail
 cd "${CIDA_REPO:?Submit with bash scripts/slurm/submit_office.sh}"
@@ -41,7 +41,8 @@ case "${1:-}" in
             --output "${SOURCE}"
         ;;
     target)
-        SEED="${SLURM_ARRAY_TASK_ID:?Target jobs require --array=0-4%1}"
+        SEED="${2:?Pass the target seed as the second script argument}"
+        [[ "${SEED}" =~ ^[0-4]$ ]] || { echo "Expected seed 0-4." >&2; exit 2; }
         TRIAL="${OUTPUT}/target/seed_${SEED}"
         [[ ! -e "${TRIAL}/metrics.json" ]] || { echo "Completed result exists: ${TRIAL}; choose another OFFICE_OUTPUT." >&2; exit 2; }
         "${PYTHON}" - "${SOURCE}" <<'PY'
