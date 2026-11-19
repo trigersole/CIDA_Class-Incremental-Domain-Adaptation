@@ -30,8 +30,7 @@ done
 mkdir -p "${OUTPUT}"
 echo "Stage: ${1:-}; data: ${DATA}; source: ${SOURCE}; output: ${OUTPUT}"
 
-case "${1:-}" in
-    source)
+train_source_stage() {
         [[ ! -e "${SOURCE}" ]] || { echo "Source already exists; submit again to reuse it." >&2; exit 2; }
         srun "${PYTHON}" -u train_source.py \
             --benchmark office31 --preset friend --domain amazon \
@@ -39,9 +38,10 @@ case "${1:-}" in
             --data "${DATA}" --device cuda --batch-size 8 --lr 0.0001 \
             --epochs 50 --seed 0 --workers 0 --cpu-threads 4 \
             --output "${SOURCE}"
-        ;;
-    target)
-        SEED="${2:?Pass the target seed as the second script argument}"
+}
+
+train_target_stage() {
+        SEED="${1:?Pass the target seed}"
         [[ "${SEED}" =~ ^[0-4]$ ]] || { echo "Expected seed 0-4." >&2; exit 2; }
         TRIAL="${OUTPUT}/target/seed_${SEED}"
         [[ ! -e "${TRIAL}/metrics.json" ]] || { echo "Completed result exists: ${TRIAL}; choose another OFFICE_OUTPUT." >&2; exit 2; }
@@ -60,6 +60,26 @@ PY
             --projection-steps 2000 --confidence-fraction 0.2 \
             --disable-separability --eval-every 1 \
             --workers 0 --cpu-threads 4 --seeds "${SEED}" --output "${TRIAL}"
+}
+
+case "${1:-all}" in
+    source) train_source_stage ;;
+    target) train_target_stage "${2:?Pass a seed}" ;;
+    all)
+        if [[ -f "${SOURCE}" ]]; then
+            echo "Reusing source: ${SOURCE}"
+        else
+            train_source_stage
+        fi
+        for SEED in 0 1 2 3 4; do
+            if [[ -f "${OUTPUT}/target/seed_${SEED}/metrics.json" ]]; then
+                echo "Skipping completed seed ${SEED}"
+            else
+                echo "Starting seed ${SEED}"
+                train_target_stage "${SEED}"
+            fi
+        done
+        "${PYTHON}" scripts/slurm/summarize_office.py "${OUTPUT}"
         ;;
-    *) echo "Expected source or target stage." >&2; exit 2 ;;
+    *) echo "Expected all, source, or target stage." >&2; exit 2 ;;
 esac

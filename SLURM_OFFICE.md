@@ -5,14 +5,15 @@ three-layer FC+ELU residual projections, and La1 disabled. Digits is unchanged.
 
 Each job requests one GPU, four CPUs, 32 GB **host RAM**, and six hours. GPU VRAM
 depends on your cluster's GPU allocation; `--mem` does not select GPU VRAM.
-Source training is one job (one warm-up + 50 epochs), followed by five separate
-target jobs (60 epochs each, seeds 0-4). The launcher submits **one job per call**,
-without job arrays or queued dependencies, to respect the account submission
-limit. Run the same submit command after each job finishes: source, seed 0,
-seed 1, seed 2, seed 3, seed 4. Completed outputs determine the next stage.
+The launcher submits **one job** that runs source training (one warm-up + 50
+epochs), then all five target seeds (60 epochs each, seeds 0-4) sequentially,
+then the combined result summary. There are no job arrays or queued dependencies.
+Completed source/seed outputs are skipped when resubmitting the same experiment.
 It refuses another submission while a `cida-office` job is queued or running.
 Runtime on your cluster is
-unmeasured: each stage must finish within six hours. The current trainer saves
+unmeasured: the entire pipeline shares one six-hour allocation. It may need
+resubmission to complete all stages. Each individual stage must fit within six
+hours. The current trainer saves
 model checkpoints at stage completion and does not support partial-stage resume;
 an interrupted source or seed must restart. Epoch diagnostics are saved during
 target training. Separate completed seeds remain available.
@@ -62,10 +63,11 @@ compute nodes, not login-node-only temporary storage.
 bash scripts/slurm/submit_office.sh
 ```
 
-After this job finishes, repeat that command to submit the next stage. Repeat
-once more after seed 4 finishes to generate the combined summary. A failed stage
-is selected again because it has no completed checkpoint/result. Do not submit
-all stages together: the account may count queued array tasks against its limit.
+This single job automatically runs source training and seeds 0-4, then generates
+the summary. If the time limit stops the pipeline, run the same command again:
+completed stages are skipped, while the interrupted stage restarts. Do not change
+settings or source contents while reusing an output folder. Use a new
+`OFFICE_OUTPUT` for a different experiment.
 
 If your cluster requires a partition or account, pass the actual campus values:
 

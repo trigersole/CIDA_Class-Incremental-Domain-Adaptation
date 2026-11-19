@@ -17,18 +17,7 @@ if [[ -n "${ACTIVE}" ]]; then
     echo "Wait for it to finish, then run this command again."
     exit 0
 fi
-if [[ ! -f "${OFFICE_SOURCE}" ]]; then
-    JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch source)
-    echo "Source job: ${JOB%%;*}"
-    echo "After it finishes, run this same submit command again for seed 0."
-    exit 0
-fi
-for SEED in 0 1 2 3 4; do
-    if [[ ! -f "${OFFICE_OUTPUT}/target/seed_${SEED}/metrics.json" ]]; then
-        JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch target "${SEED}")
-        echo "Target seed ${SEED} job: ${JOB%%;*}"
-        echo "After it finishes, run this same submit command again for the next seed."
-        exit 0
-    fi
-done
-"${CIDA_PYTHON}" scripts/slurm/summarize_office.py "${OFFICE_OUTPUT}"
+JOB=$(sbatch --parsable "$@" scripts/slurm/office.sbatch all)
+echo "Office pipeline job: ${JOB%%;*}"
+echo "Runs source then seeds 0-4 sequentially, followed by the combined summary."
+echo "If the six-hour limit interrupts it, rerun this command; completed stages are skipped."
