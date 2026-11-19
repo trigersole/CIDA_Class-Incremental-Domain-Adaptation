@@ -96,6 +96,20 @@ export OFFICE_OUTPUT="/absolute/path/to/runs/office_residual3_no_la1"
 
 ## Monitor and collect
 
+Every training `srun` step explicitly requests one GPU and four CPUs. Its
+`gpu_step.py` launcher performs a CUDA matrix multiplication inside that step
+before starting training. Look for `slurm_gpu_step` with
+`cuda_compute_verified: true`, followed by `training_device` reporting model,
+input, and output on `cuda:0` (the local CUDA index of the allocated GPU).
+The job also logs `scontrol show job` so actual GPU/RAM allocations can be compared
+with requests. A CPU-only step fails before training; visibility is never forced
+by overwriting `CUDA_VISIBLE_DEVICES`.
+
+These diagnostics do not establish the cause of a previous SIGKILL. An empty
+`squeue` means the job has ended, not that it ran on CPU. Slurm may record a step
+as cancelled under the job owner's UID when the parent batch fails. Check both
+the batch status and error log before attributing termination to a user action.
+
 ```bash
 squeue -u "$USER"
 ls logs/

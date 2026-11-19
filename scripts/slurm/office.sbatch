@@ -12,6 +12,7 @@
 set -Eeuo pipefail
 cd "${CIDA_REPO:?Submit with bash scripts/slurm/submit_office.sh}"
 export PYTHONUNBUFFERED=1
+export CIDA_DEVICE_DIAGNOSTICS=1
 # Keep BLAS and PyTorch within the four allocated CPUs; no loader workers.
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
@@ -23,7 +24,12 @@ DATA="${OFFICE_DATA:-${CIDA_REPO}/data/office31}"
 OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_residual3_no_la1}"
 SOURCE="${OFFICE_SOURCE:-${OUTPUT}/source.pt}"
 
-"${PYTHON}" -c 'import torch; assert torch.cuda.is_available(), "CUDA unavailable: check the Python environment and GPU allocation"; print("GPU:", torch.cuda.get_device_name(0))'
+echo "Job=${SLURM_JOB_ID:-unset}; host=$(hostname); CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+echo "Requested: one GPU, four CPUs, 32G host RAM. Actual allocation:"
+scontrol show job "${SLURM_JOB_ID}" || true
+# Explicit step resources; the CUDA probe runs in the same step as training.
+GPU_STEP=(srun --nodes=1 --ntasks=1 --cpus-per-task=4 --gres=gpu:1)
+trap 'status=$?; echo "Batch exit status=${status}; date=$(date -Is)" >&2' EXIT
 for domain in amazon dslr; do
     [[ -d "${DATA}/${domain}" ]] || { echo "Missing dataset: ${DATA}/${domain}" >&2; exit 2; }
 done
@@ -32,7 +38,7 @@ echo "Stage: ${1:-}; data: ${DATA}; source: ${SOURCE}; output: ${OUTPUT}"
 
 train_source_stage() {
         [[ ! -e "${SOURCE}" ]] || { echo "Source already exists; submit again to reuse it." >&2; exit 2; }
-        srun "${PYTHON}" -u train_source.py \
+        "${GPU_STEP[@]}" "${PYTHON}" -u scripts/slurm/gpu_step.py train_source.py \
             --benchmark office31 --preset friend --domain amazon \
             --office-shared 20 --office-weights imagenet \
             --data "${DATA}" --device cuda --batch-size 8 --lr 0.0001 \
@@ -54,7 +60,7 @@ assert (c.get("stage") == "source" and c.get("benchmark") == "office31"
         and c.get("config", {}).get("preset") == "friend"
         and c.get("imagenet_pretrained") is True), "Expected an ImageNet-initialized Amazon/20-class friend source"
 PY
-        srun "${PYTHON}" -u adapt_target.py \
+        "${GPU_STEP[@]}" "${PYTHON}" -u scripts/slurm/gpu_step.py adapt_target.py \
             --source "${SOURCE}" --target-domain dslr --data "${DATA}" \
             --device cuda --batch-size 8 --lr 0.0001 --epochs 60 \
             --projection-steps 2000 --confidence-fraction 0.2 \

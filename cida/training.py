@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from itertools import islice
 import json
 import math
+import os
 import random
 
 import torch
@@ -41,6 +42,17 @@ def batches(data_loader, limit):
 
 def optimizer_for(lr, *modules):
     return torch.optim.Adam([p for module in modules for p in module.parameters()], lr=lr)
+
+
+def log_training_device(stage, model, images, output):
+    if os.environ.get("CIDA_DEVICE_DIAGNOSTICS") != "1":
+        return
+    record = dict(stage="training_device", training_stage=stage,
+                  model_device=str(next(model.parameters()).device),
+                  input_device=str(images.device), output_device=str(output.device))
+    if output.is_cuda:
+        record["gpu_memory_allocated_mib"] = torch.cuda.memory_allocated(output.device) / 1024 ** 2
+    print(json.dumps(record), flush=True)
 
 
 def update(model, optimizer, loss):
@@ -83,7 +95,11 @@ def train_source(model, dataset, config, device, sigma=3.0, *, stats_dataset=Non
     model.train()
     total, count = 0.0, 0
     for images, labels in batches(train_loader, config.max_steps):
-        loss = F.cross_entropy(model(images.to(device)), labels.to(device))
+        images = images.to(device)
+        logits = model(images)
+        if count == 0:
+            log_training_device("source", model, images, logits)
+        loss = F.cross_entropy(logits, labels.to(device))
         total += update(model, warmup, loss)
         count += 1
     history = [log_epoch("source_warmup", 1, {"CE": total}, {"CE": count})]
@@ -238,6 +254,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
                 module.training = mode
 
     initial_metrics = report(0)
+    device_logged = False
     if initial_metrics is not None:
         history.append({"stage": "target_initialization", "epoch": 0, "metrics": initial_metrics})
     for epoch in range(1, config.epochs + 1):
@@ -271,10 +288,14 @@ def train_target(model, target, supports, source_prototypes, config, projection_
             # batch so the other losses keep their baseline update budgets.
             if (name == "La2" and disable_guide_pulling) or (name == "La1" and disable_separability):
                 continue
+            images = images.to(supports.device)
             loss = target_loss(
-                name, model, stats, source_prototypes, supports, images.to(supports.device),
+                name, model, stats, source_prototypes, supports, images,
                 labels, config.gaussian_score, la1_temperature=la1_temperature,
             )
+            if not device_logged:
+                log_training_device("target", model, images, loss)
+                device_logged = True
             totals[name] += update(model, optimizers[name], loss)
             steps[name] += 1
         previous_counts = stats.counts.tolist()
