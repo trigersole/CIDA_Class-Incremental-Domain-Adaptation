@@ -23,6 +23,9 @@ Source training uses labeled MNIST digits 0â€“4. The source checkpoint cont
 
 ### Office-31 on CUDA
 
+For an existing Office friend run, see [KAGGLE_OFFICE_DIAGNOSTICS.md](KAGGLE_OFFICE_DIAGNOSTICS.md)
+to compare source, initialization and final checkpoints without rerunning adaptation.
+
 Download and extract [Office-31](https://people.eecs.berkeley.edu/~jhoffman/domainadapt/#datasets_code). Pass the directory containing `amazon`, `dslr`, and `webcam` as `--data`. Each domain should have 31 class folders containing the images. The loader accepts `amazon/images/<class>/*.jpg` or `amazon/<class>/*.jpg` and the equivalent layouts for DSLR and Webcam.
 
 Start with Amazon â†’ DSLR using the Table 2 class counts:
