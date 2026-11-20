@@ -1,4 +1,4 @@
-"""Office source gradients, projection initialization and a paired BN experiment."""
+"""Office source gradients, projection initialization and controlled target experiments."""
 import argparse
 from dataclasses import asdict
 import json
@@ -9,7 +9,8 @@ import torch
 
 from cida.cli import (configure_device, load_checkpoint, positive_int, save_json,
                       seed_all, source_gaussian_score)
-from cida.diagnostics import EpochMetrics
+from cida.diagnostics import EpochMetrics, pseudo_precision_summary
+from cida.guides import build_guides, nearest_guides
 from cida.models import AdaptationModel, SourceModel
 from cida.office import office_source, office_target, office_trial
 from cida.prototypes import GaussianBank, separability_loss
@@ -94,14 +95,40 @@ def bn_affine(module):
             for key, value in layer.named_parameters(recurse=False)}
 
 
+@torch.inference_mode()
+def guide_precision(model, evaluation_loader, bank, supports, stats):
+    """Clean/eval assignments and the actual confident subset from statistics refresh."""
+    model.eval()
+    guides = build_guides(model, bank, supports)
+    predictions, truth = [], []
+    for images, labels in evaluation_loader:
+        assigned, _ = nearest_guides(model.f_t(images.to(supports.device)), guides)
+        predictions.append(assigned.cpu())
+        truth.append(labels.cpu())
+    predictions, truth = torch.cat(predictions), torch.cat(truth)
+    if len(truth) != int(stats.counts.sum()):
+        raise ValueError("Pseudo-label diagnostics need evaluation images in target-ID order, with supports excluded.")
+    selected = stats.selected_ids.cpu().long()
+    classes, shared = len(guides), model.num_shared
+    return dict(
+        all_clean_eval=pseudo_precision_summary(predictions, truth, classes, shared),
+        confident_statistics=pseudo_precision_summary(stats.selected_labels, truth[selected], classes, shared),
+        confident_assignments_match=bool(torch.equal(predictions[selected], stats.selected_labels.cpu())),
+        counts_match_statistics=bool(torch.equal(predictions.bincount(minlength=classes), stats.counts.cpu()))
+    ), truth
+
+
 def run_arm(source, bank, target, stats_target, supports, test, config, projection_steps,
-            output, freeze_bn, proxy_samples, proxy_labels, on_result=None):
+            output, freeze_bn, proxy_samples, proxy_labels, on_result=None, ft_lr=None):
     # Both arms reset RNG before model construction and use the same support images.
     seed_all(config.seed)
     model = AdaptationModel(source, len(supports)).to(supports.device)
     arm = dict(freeze_bn_stats=freeze_bn, gaussian_score="log-density",
+               ft_lr=config.lr if ft_lr is None else ft_lr, other_lr=config.lr,
                config=asdict(config), initialization={}, epochs=[])
     initial_buffers, initial_affine = {}, {}
+    truth_by_id = None
+    observed_la1 = {}
 
     def initialization(stage, current):
         projection = projection_report(current, proxy_samples, proxy_labels)
@@ -117,6 +144,7 @@ def run_arm(source, bank, target, stats_target, supports, test, config, projecti
             initial_affine.update(bn_affine(current.f_t))
         result = arm["initialization"][stage]
         print(json.dumps(dict(stage=stage, freeze_bn_stats=freeze_bn,
+                              ft_lr=arm["ft_lr"],
                               projection={k: v for k, v in result["projection"].items() if "mse" in k or "squared_l2" in k},
                               target={k: v for k, v in result["target"].items() if isinstance(v, (int, float))})),
               flush=True)
@@ -127,18 +155,39 @@ def run_arm(source, bank, target, stats_target, supports, test, config, projecti
                            source.num_shared, source.num_shared + len(supports), config.epochs)
 
     def epoch_report(epoch, current, stats):
+        nonlocal truth_by_id
         result = metrics(epoch, current, stats)
+        precision, truth_by_id = guide_precision(current, loader(test, config), bank, supports, stats)
+        precision["statistics_for_next_epoch"] = epoch + 1
+        observed = observed_la1.get(epoch, [])
+        precision["la1_training_batches"] = (pseudo_precision_summary(
+            torch.cat([p for p, _ in observed]), torch.cat([t for _, t in observed]),
+            source.num_shared + len(supports), source.num_shared) if observed else None)
         arm["epochs"].append(dict(epoch=epoch, metrics=result,
                                   paths=score_paths(current, test, config, supports.device),
+                                  pseudo_label_precision=precision,
                                   pseudo_counts=stats.counts.tolist()))
+        print(json.dumps(dict(stage="pseudo_label_precision", epoch=epoch, ft_lr=arm["ft_lr"],
+                              clean_all=precision["all_clean_eval"]["micro_precision"],
+                              confident=precision["confident_statistics"]["micro_precision"],
+                              represented_classes=precision["all_clean_eval"]["represented_classes"],
+                              la1_train=(precision["la1_training_batches"]["micro_precision"] if observed else None))),
+              flush=True)
         if on_result:
             on_result(arm)
         return result
 
+    def observe_la1(epoch, sample_ids, predictions):
+        # Labels are used exclusively for reporting already-used pseudo-labels.
+        # Count processed occurrences, including repeats, not unique images.
+        if truth_by_id is None:
+            raise RuntimeError("Epoch-zero diagnostics must establish target-ID alignment first.")
+        observed_la1.setdefault(epoch, []).append((predictions, truth_by_id[sample_ids]))
+
     history = train_target(model, target, supports, bank, config, projection_steps,
                            stats_target=stats_target, fraction=.2, la1_samples="all",
                            freeze_bn_stats=freeze_bn, initialization_callback=initialization,
-                           epoch_callback=epoch_report)
+                           epoch_callback=epoch_report, ft_lr=ft_lr, la1_observer=observe_la1)
     updates = [row for row in history if row["stage"] == "target"]
     arm["all_losses_updated_each_epoch"] = all(
         not row["disabled_losses"] and all(row["updates"].get(name, 0) > 0
@@ -168,7 +217,10 @@ def main():
     parser.add_argument("--density-source", type=Path,
                         help="Optional completed density source to probe as well.")
     parser.add_argument("--data", type=Path, default=Path("data/office31"))
-    parser.add_argument("--output", type=Path, default=Path("runs/office_checks_seed0"))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--comparison", choices=("bn", "ft-lr"), default="bn")
+    parser.add_argument("--ft-lr", type=float, default=1e-5,
+                        help="Candidate f_t learning rate in --comparison ft-lr; others stay at 1e-4.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=positive_int, default=5)
     parser.add_argument("--projection-steps", type=positive_int, default=2000)
@@ -178,6 +230,10 @@ def main():
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
+    if not math.isfinite(args.ft_lr) or args.ft_lr <= 0:
+        parser.error("--ft-lr must be finite and positive")
+    args.output = args.output or Path(
+        f"runs/office_{'lr_checks' if args.comparison == 'ft-lr' else 'checks'}_seed{args.seed}")
     if not args.source.is_file():
         parser.error(f"Missing log-density source: {args.source}. Pass --source with its actual path.")
     report_path = args.output / "report.json"
@@ -188,7 +244,7 @@ def main():
             or checkpoint.get("source_domain") != "amazon"
             or checkpoint.get("config", {}).get("preset") != "friend"
             or source_gaussian_score(checkpoint) != "log-density"):
-        parser.error("The A-to-D BN comparison requires an Amazon Office friend source trained with log-density.")
+        parser.error("The A-to-D comparison requires an Amazon Office friend source trained with log-density.")
     device = configure_device(args)
     config = TrainingConfig(preset="friend", gaussian_score="log-density", epochs=args.epochs,
                             batch_size=args.batch_size, lr=1e-4, cov_ridge=.14,
@@ -204,6 +260,7 @@ def main():
     report = dict(source=str(args.source.resolve()), seed=args.seed, support_ids=ids,
                   purpose="Diagnostic comparison; target labels only score predictions; no checkpoint selection.",
                   config=asdict(config), projection_steps=args.projection_steps,
+                  comparison=args.comparison,
                   confidence_fraction=.2, source_probe_batches=args.source_batches,
                   source_probes={}, arms={})
 
@@ -243,22 +300,26 @@ def main():
     with diagnostic_state(source, device):
         seed_all(args.seed + 10000)
         proxies, labels = proxy_batch(bank, 256, next(source.parameters()).dtype)
-    for name, frozen in (("bn_training", False), ("bn_frozen", True)):
+    arms = (("bn_training", False, None), ("bn_frozen", True, None)) if args.comparison == "bn" else (
+        ("baseline", False, config.lr), ("slower_ft", False, args.ft_lr))
+    for name, frozen, ft_lr in arms:
         def progress(arm):
             report["arms"][name] = arm
             save()
         report["arms"][name] = run_arm(
             source, bank, target, stats_target, supports, test, config, args.projection_steps,
-            args.output / name, frozen, proxies, labels, progress)
+            args.output / name, frozen, proxies, labels, progress, ft_lr=ft_lr)
         save()
-    baseline, frozen = report["arms"]["bn_training"], report["arms"]["bn_frozen"]
-    report["identical_epoch_zero"] = baseline["epochs"][0]["metrics"] == frozen["epochs"][0]["metrics"]
-    report["final_difference_frozen_minus_training"] = {
-        metric: frozen["final"][metric] - baseline["final"][metric]
+    baseline, candidate = (report["arms"][item[0]] for item in arms)
+    report["identical_epoch_zero"] = baseline["epochs"][0]["metrics"] == candidate["epochs"][0]["metrics"]
+    report["final_difference_candidate_minus_baseline"] = {
+        metric: candidate["final"][metric] - baseline["final"][metric]
         for metric in ("ALL", "SHARED", "PRIV")}
+    if args.comparison == "bn":
+        report["final_difference_frozen_minus_training"] = report["final_difference_candidate_minus_baseline"]
     save()
     if not report["identical_epoch_zero"]:
-        raise RuntimeError("The BN arms did not start with matching epoch-zero predictions; inspect report.json.")
+        raise RuntimeError("The arms did not start with matching epoch-zero predictions; inspect report.json.")
     print("Final comparison:", {name: {k: arm["final"][k] for k in ("ALL", "SHARED", "PRIV")}
                                 for name, arm in report["arms"].items()}, flush=True)
     print("Saved diagnostic report:", report_path, flush=True)

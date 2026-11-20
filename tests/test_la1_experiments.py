@@ -80,6 +80,28 @@ class La1ExperimentsTests(unittest.TestCase):
         for key, expected in self.model.state_dict().items():
             torch.testing.assert_close(other.state_dict()[key], expected, rtol=0, atol=0)
 
+    def test_observing_actual_la1_labels_does_not_change_training(self):
+        other = copy.deepcopy(self.model)
+        torch.manual_seed(100)
+        train_target(self.model, self.target, self.supports, self.source, self.config, 1)
+        observed = []
+
+        def observer(epoch, ids, predictions):
+            observed.append((epoch, ids.clone(), predictions.clone()))
+            torch.rand(50)
+            random.random()
+
+        torch.manual_seed(100)
+        train_target(other, self.target, self.supports, self.source, self.config, 1,
+                     la1_observer=observer)
+        self.assertEqual(len(observed), 2)
+        for epoch, ids, predictions in observed:
+            self.assertEqual(epoch, 1)
+            self.assertEqual(ids.shape, predictions.shape)
+            self.assertTrue(bool(((ids >= 0) & (ids < len(self.target))).all()))
+        for key, expected in self.model.state_dict().items():
+            torch.testing.assert_close(other.state_dict()[key], expected, rtol=0, atol=0)
+
     def test_epoch_json_csv_and_final_epoch_cadence(self):
         dataset = TensorDataset(self.images, torch.arange(10))
         stats = SimpleNamespace(counts=torch.ones(10, dtype=torch.long), selected_ids=torch.tensor([0, 1]))

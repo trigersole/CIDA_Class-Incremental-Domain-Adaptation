@@ -32,6 +32,8 @@ def main():
                         help="Ablation: skip La2 while retaining all other update slots.")
     parser.add_argument("--freeze-bn-stats", action="store_true",
                         help="Office ablation: freeze target BN running statistics after AdaBN; affine parameters still train.")
+    parser.add_argument("--ft-lr", type=float,
+                        help="Office target feature-extractor learning rate; other networks keep --lr.")
     parser.add_argument("--disable-separability", action="store_true",
                         help="Diagnostic: skip La1 while preserving other update slots.")
     parser.add_argument("--la1-samples", choices=("all", "confident"), default="all",
@@ -59,6 +61,8 @@ def main():
     office = benchmark == "office31"
     if args.freeze_bn_stats and not office:
         parser.error("--freeze-bn-stats is an Office-only ablation")
+    if args.ft_lr is not None and (not office or not math.isfinite(args.ft_lr) or args.ft_lr <= 0):
+        parser.error("--ft-lr requires Office and a finite positive learning rate")
     shared = tuple(checkpoint["shared_classes"])
     source_domain = checkpoint.get("source_domain")
     protocol = args.protocol or ("transductive" if office else "held-out")
@@ -111,6 +115,7 @@ def main():
             la1_samples=args.la1_samples, la1_temperature=args.la1_temperature,
             epoch_callback=epoch_metrics,
             freeze_bn_stats=args.freeze_bn_stats,
+            ft_lr=args.ft_lr,
         )
         metrics = evaluate(model, loader(test, trial), device, len(shared), len(shared) + len(private))
         result = {"seed": seed, "support_ids": support_ids, **metrics}
@@ -125,6 +130,7 @@ def main():
                        "disable_separability": args.disable_separability,
                        "la1_samples": args.la1_samples, "la1_temperature": args.la1_temperature,
                        "freeze_bn_stats": args.freeze_bn_stats,
+                       "ft_lr": trial.lr if args.ft_lr is None else args.ft_lr,
                        "eval_every": args.eval_every},
             "history": history, "metrics": metrics,
         })
@@ -140,6 +146,7 @@ def main():
         "gaussian_score": config.gaussian_score,
         "source_gaussian_score": source_gaussian_score(checkpoint),
         "freeze_bn_stats": args.freeze_bn_stats,
+        "ft_lr": config.lr if args.ft_lr is None else args.ft_lr,
         "la1_samples": args.la1_samples, "la1_temperature": args.la1_temperature,
         "eval_every": args.eval_every, "reported_epoch": config.epochs,
     }

@@ -1,5 +1,9 @@
 # Office-31 on a campus Slurm cluster
 
+For the next learning-rate comparison, use `sbatch office_lr_checks.slurm`.
+It compares normal-BN target training with `f_t` at `1e-4` versus `1e-5`, keeps
+all losses enabled and reports actual La1 pseudo-label precision.
+
 For source-gradient, projection-warm-up and paired BN diagnostics, use
 `sbatch office_checks.slurm`; see [OFFICE_TRAINING_CHECKS.md](OFFICE_TRAINING_CHECKS.md).
 This reuses the previous log-density source for two five-epoch target trials.

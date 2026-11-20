@@ -1,5 +1,65 @@
 # Office training diagnostics
 
+## Feature-extractor learning-rate comparison
+
+After the BN experiment, test slower feature updates with:
+
+```bash
+git pull --ff-only
+sbatch office_lr_checks.slurm
+```
+
+This runs two five-epoch seed-0 trials sequentially in one GPU job:
+
+| Setting | Baseline | Candidate |
+| --- | --- | --- |
+| `f_t` learning rate | `1e-4` | `1e-5` |
+| `f_e`, `f_d`, `g_t` learning rate | `1e-4` | `1e-4` |
+| BN running statistics | Updated normally after AdaBN | Same |
+| Gaussian objective | Log-density | Same |
+| Target losses | All five enabled; La1 uses all targets | Same |
+
+Both trials reuse the saved log-density source, identical support images,
+projection warm-up and model initialization. There are no architecture changes
+or source retraining. `f_t` uses the smaller rate in Lc, La1 and La2; mixed
+optimizers keep the other networks at `1e-4`. Projection warm-up keeps `1e-4`.
+
+Results are in `runs/office_lr_checks_seed0/report.json`, with `baseline/` and
+`slower_ft/` subdirectories. Logs are `office-lr-JOBID.out` and `.err`.
+The earlier BN report is retained. Alternate source/output/epoch arguments work
+with either Slurm launcher, for example:
+
+```bash
+sbatch office_lr_checks.slurm --source /path/to/log_density_source.pt --epochs 5
+```
+
+Each epoch now reports three kinds of pseudo-label precision:
+
+- `all_clean_eval`: assignments on clean images using eval-mode guide features.
+- `confident_statistics`: the actual confident labels and sample IDs selected
+  at statistics refresh, for the next training epoch.
+- `la1_training_batches`: the pseudo-labels actually used by La1 during the
+  completed epoch, including training augmentation and BN behavior. Counts
+  represent processed occurrences and may include repeated images.
+
+Each includes micro precision, macro precision over nonempty predicted classes,
+per-class precision and assignment counts. Shared/private precision groups by
+the **assigned** class; it is different from shared/private classification
+accuracy. Always inspect class coverage alongside precision. At epoch 0 there
+are no training batches yet, so `la1_training_batches` is null.
+
+Target ground truth is used only by read-only reporting, after pseudo-labels
+have been used in their updates. It never enters a training loss, guide,
+confidence selection or optimizer. Tests verify the observer leaves model
+updates and RNG unchanged.
+
+For a later standalone Office adaptation run, `adapt_target.py --ft-lr 1e-5`
+sets this rate while `--lr 1e-4` sets other networks' rates. The flag defaults
+to no override, preserving existing commands and Digits behavior. The learning
+rate change is a diagnostic modification, not an exact paper reproduction.
+
+## Earlier BN comparison
+
 Run from the campus repository root after pulling the update:
 
 ```bash

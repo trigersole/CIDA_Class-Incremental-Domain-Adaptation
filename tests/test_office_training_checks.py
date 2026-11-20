@@ -14,7 +14,8 @@ import diagnose_office_training as checks
 from cida.cli import save_checkpoint
 from cida.models import SourceModel
 from cida.prototypes import GaussianBank, fit_gaussians
-from cida.training import TrainingConfig, diagnostic_state, freeze_batchnorm_statistics
+from cida.training import TrainingConfig, diagnostic_state, freeze_batchnorm_statistics, target_optimizers
+from cida.diagnostics import pseudo_precision_summary
 from cida.guides import build_guides
 
 
@@ -65,6 +66,44 @@ class OfficeTrainingChecksTests(unittest.TestCase):
         self.assertTrue(model.f_t[1].weight.requires_grad)
 
     def test_full_script_paired_arms_and_checkpoint_preservation(self):
+        self._full_script_paired_arms("bn")
+
+    def test_full_script_learning_rate_comparison_and_precision(self):
+        self._full_script_paired_arms("ft-lr")
+
+    def test_only_ft_gets_lower_rate_in_every_optimizer(self):
+        with patch("cida.models.feature_extractor", return_value=nn.Sequential(
+                nn.Linear(12, 256), nn.BatchNorm1d(256))):
+            source = SourceModel(2, "office31", preset="friend")
+        model = checks.AdaptationModel(source, 1)
+        ft_ids = {id(p) for p in model.f_t.parameters()}
+        for name, optimizer in target_optimizers(model, 1e-4, ft_lr=1e-5).items():
+            seen_ft = False
+            for group in optimizer.param_groups:
+                for parameter in group["params"]:
+                    is_ft = id(parameter) in ft_ids
+                    seen_ft |= is_ft
+                    self.assertEqual(group["lr"], 1e-5 if is_ft else 1e-4)
+            self.assertEqual(seen_ft, name in {"Lc", "La1", "La2"})
+        for optimizer in target_optimizers(model, 1e-4).values():
+            self.assertTrue(all(group["lr"] == 1e-4 for group in optimizer.param_groups))
+        for rate in (0, -1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                target_optimizers(model, 1e-4, ft_lr=rate)
+
+    def test_precision_uses_predicted_class_denominators(self):
+        result = pseudo_precision_summary(torch.tensor([0, 0, 1, 2]),
+                                          torch.tensor([0, 1, 1, 1]), 3, 2)
+        self.assertEqual(result["micro_precision"], 50)
+        self.assertEqual(result["macro_precision"], 50)
+        self.assertEqual(result["per_class_precision"], [50., 100., 0.])
+        self.assertAlmostEqual(result["shared_micro_precision"], 200 / 3, places=4)
+        empty = pseudo_precision_summary(torch.tensor([], dtype=torch.long),
+                                         torch.tensor([], dtype=torch.long), 3, 2)
+        self.assertIsNone(empty["micro_precision"])
+        self.assertIsNone(empty["macro_precision"])
+
+    def _full_script_paired_arms(self, comparison):
         extractor = lambda *a, **k: nn.Sequential(nn.Linear(12, 256), nn.BatchNorm1d(256))
         with TemporaryDirectory() as temp, patch("cida.models.feature_extractor", side_effect=extractor):
             root = Path(temp)
@@ -80,11 +119,12 @@ class OfficeTrainingChecksTests(unittest.TestCase):
             images = torch.randn(12, 12)
             data = TensorDataset(images, torch.arange(12) % 2)
             target = TensorDataset(images[:8], torch.arange(8))
-            evaluation = TensorDataset(images, torch.arange(12) % 3)
+            evaluation = TensorDataset(images[:8], torch.arange(8) % 3)
             output = root / "checks"
             args = ["diagnose_office_training.py", "--source", str(source_path),
                     "--density-source", str(density_path), "--data", str(root),
                     "--output", str(output), "--device", "cpu", "--epochs", "1",
+                    "--comparison", comparison,
                     "--batch-size", "4", "--source-batches", "1", "--projection-steps", "2"]
             with patch("sys.argv", args), \
                  patch.object(checks, "office_source", return_value=(data, data, ("a", "b"))), \
@@ -94,10 +134,17 @@ class OfficeTrainingChecksTests(unittest.TestCase):
             report = json.loads((output / "report.json").read_text())
             self.assertTrue(report["identical_epoch_zero"])
             self.assertEqual(set(report["source_probes"]), {"log_density_source", "density_source"})
-            normal, frozen = report["arms"]["bn_training"], report["arms"]["bn_frozen"]
+            normal, frozen = (report["arms"][key] for key in (
+                ("bn_training", "bn_frozen") if comparison == "bn" else ("baseline", "slower_ft")))
             self.assertEqual(normal["initialization"], frozen["initialization"])
             self.assertTrue(normal["bn_buffers_changed_after_adabn"])
-            self.assertEqual(frozen["bn_buffers_changed_after_adabn"], [])
+            if comparison == "bn":
+                self.assertEqual(frozen["bn_buffers_changed_after_adabn"], [])
+            else:
+                self.assertTrue(frozen["bn_buffers_changed_after_adabn"])
+                self.assertFalse(frozen["freeze_bn_stats"])
+                self.assertEqual(normal["ft_lr"], 1e-4)
+                self.assertEqual(frozen["ft_lr"], 1e-5)
             self.assertTrue(frozen["bn_affine_parameters_trainable"])
             self.assertTrue(frozen["bn_affine_changed"])
             for arm in (normal, frozen):
@@ -105,6 +152,11 @@ class OfficeTrainingChecksTests(unittest.TestCase):
                 target_epoch = next(r for r in arm["history"] if r["stage"] == "target")
                 self.assertEqual(target_epoch["disabled_losses"], [])
                 self.assertEqual(set(target_epoch["updates"]), {"Lr1", "Lr2", "Lc", "La1", "La2"})
+                precision = arm["epochs"][-1]["pseudo_label_precision"]
+                self.assertTrue(precision["counts_match_statistics"])
+                self.assertTrue(precision["confident_assignments_match"])
+                self.assertEqual(precision["all_clean_eval"]["count"], 8)
+                self.assertEqual(precision["la1_training_batches"]["count"], 8)
             self.assertEqual(original, [p.read_bytes() for p in (source_path, density_path)])
 
 

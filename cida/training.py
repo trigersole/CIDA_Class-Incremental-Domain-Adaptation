@@ -160,14 +160,26 @@ def warmup_projections(model, prototypes, config, steps):
     return log_epoch("projection_warmup", 1, totals, {name: steps for name in totals})
 
 
-def target_optimizers(model, lr):
-    return {
+def target_optimizers(model, lr, ft_lr=None):
+    if ft_lr is not None and (not math.isfinite(ft_lr) or ft_lr <= 0):
+        raise ValueError("f_t learning rate must be finite and positive")
+    optimizers = {
         "Lr1": optimizer_for(lr, model.f_e, model.f_d, model.g_t),
         "Lr2": optimizer_for(lr, model.f_e, model.f_d),
         "Lc": optimizer_for(lr, model.f_t, model.g_t),
         "La1": optimizer_for(lr, model.f_t),
         "La2": optimizer_for(lr, model.f_e, model.f_t),
     }
+    if ft_lr is not None:
+        # Mixed losses must keep g_t and f_e at the original learning rate.
+        optimizers["Lc"] = torch.optim.Adam([
+            {"params": model.f_t.parameters(), "lr": ft_lr, "name": "f_t"},
+            {"params": model.g_t.parameters(), "lr": lr, "name": "g_t"}], lr=lr)
+        optimizers["La1"] = optimizer_for(ft_lr, model.f_t)
+        optimizers["La2"] = torch.optim.Adam([
+            {"params": model.f_e.parameters(), "lr": lr, "name": "f_e"},
+            {"params": model.f_t.parameters(), "lr": ft_lr, "name": "f_t"}], lr=lr)
+    return optimizers
 
 
 def confidence_batches(target, stats, config, steps, epoch):
@@ -189,7 +201,8 @@ def confidence_batches(target, stats, config, steps, epoch):
 
 
 def target_loss(name, model, stats, source_prototypes, supports, images,
-                pseudo_labels=None, gaussian_score="density", la1_temperature=1.0):
+                pseudo_labels=None, gaussian_score="density", la1_temperature=1.0,
+                loss_details=None):
     if name in {"Lr1", "Lr2"}:
         proxies, labels = proxy_batch(source_prototypes, len(images), supports.dtype)
         projected = model.f_e(proxies)
@@ -211,6 +224,8 @@ def target_loss(name, model, stats, source_prototypes, supports, images,
             if guides is None:
                 guides = build_guides(model, source_prototypes, supports)
             pseudo_labels, _ = nearest_guides(features, guides)
+        if loss_details is not None:
+            loss_details["pseudo_labels"] = pseudo_labels.detach()
         return separability_loss(features, pseudo_labels, stats.prototypes, gaussian_score,
                                  temperature=la1_temperature)
     if name == "La2":
@@ -245,12 +260,18 @@ def diagnostic_state(model, device):
 def train_target(model, target, supports, source_prototypes, config, projection_steps,
                  fraction=0.2, *, stats_target=None, disable_guide_pulling=False, disable_separability=False,
                  la1_samples="all", la1_temperature=1.0, epoch_callback=None,
-                 freeze_bn_stats=False, initialization_callback=None):
+                 freeze_bn_stats=False, initialization_callback=None, ft_lr=None,
+                 la1_observer=None):
     if la1_samples not in {"all", "confident"}:
         raise ValueError("la1_samples must be all or confident")
+    if ft_lr is not None and (not math.isfinite(ft_lr) or ft_lr <= 0):
+        raise ValueError("f_t learning rate must be finite and positive")
+    if la1_observer is not None and la1_samples != "all":
+        raise ValueError("La1 batch diagnostics require all-target sampling for stable sample IDs")
     print(json.dumps(dict(stage="target_settings", gaussian_score=config.gaussian_score,
                           la1_samples=la1_samples,
                           freeze_bn_stats=freeze_bn_stats,
+                          ft_lr=config.lr if ft_lr is None else ft_lr, other_lr=config.lr,
                           disabled_losses=(["La1"] if disable_separability else []) +
                                           (["La2"] if disable_guide_pulling else []))), flush=True)
     if not math.isfinite(la1_temperature) or la1_temperature <= 0:
@@ -271,7 +292,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
     initialization_report("after_projection_warmup")
     target_loader = loader(target, config, shuffle=True)
     stats_loader = loader(target if stats_target is None else stats_target, config)
-    optimizers = target_optimizers(model, config.lr)
+    optimizers = target_optimizers(model, config.lr, ft_lr)
     order = tuple(optimizers)
     step = 0
     stats = refresh_statistics(model, stats_loader, source_prototypes, supports, config.cov_ridge, fraction)
@@ -317,7 +338,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
                     remaining -= 1
                     if remaining == 0:
                         return
-        for images, _ in epoch_batches():
+        for images, sample_ids in epoch_batches():
             name = order[step % len(order)]
             step += 1
             labels = None
@@ -331,15 +352,23 @@ def train_target(model, target, supports, source_prototypes, config, projection_
             if (name == "La2" and disable_guide_pulling) or (name == "La1" and disable_separability):
                 continue
             images = images.to(supports.device)
+            details = {} if name == "La1" and la1_observer is not None else None
             loss = target_loss(
                 name, model, stats, source_prototypes, supports, images,
                 labels, config.gaussian_score, la1_temperature=la1_temperature,
+                **({"loss_details": details} if details is not None else {}),
             )
             if not device_logged:
                 log_training_device("target", model, images, loss)
                 device_logged = True
             totals[name] += update(model, optimizers[name], loss)
             steps[name] += 1
+            if details is not None:
+                # Observe already-used pseudo-labels after the update. No target
+                # ground truth enters this function, the loss, or its optimizer.
+                with diagnostic_state(model, supports.device), torch.inference_mode():
+                    la1_observer(epoch, sample_ids.detach().cpu().clone(),
+                                 details["pseudo_labels"].cpu().clone())
         previous_counts = stats.counts.tolist()
         previous_confident_count = len(stats.selected_ids)
         stats = refresh_statistics(model, stats_loader, source_prototypes, supports, config.cov_ridge, fraction)
@@ -350,6 +379,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
             next_pseudo_label_counts=stats.counts.tolist(),
             la1_samples=la1_samples, la1_temperature=la1_temperature,
             freeze_bn_stats=freeze_bn_stats,
+            ft_lr=config.lr if ft_lr is None else ft_lr,
             **({"metrics": metrics} if metrics is not None else {}),
             disabled_losses=(["La2"] if disable_guide_pulling else []) + (["La1"] if disable_separability else []),
         ))
