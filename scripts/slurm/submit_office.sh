@@ -6,8 +6,8 @@ cd "${CIDA_REPO}"
 export CIDA_PYTHON="${CIDA_PYTHON:-${CIDA_REPO}/.venv/bin/python}"
 [[ -x "${CIDA_PYTHON}" ]] || { echo 'Run bash scripts/slurm/setup_office.sh first, or set CIDA_PYTHON to an absolute Python path.' >&2; exit 2; }
 export OFFICE_DATA="${OFFICE_DATA:-${CIDA_REPO}/data/office31}"
-export OFFICE_OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_mlp3_no_la1}"
-export OFFICE_SOURCE="${OFFICE_SOURCE:-${CIDA_REPO}/runs/office_residual3_no_la1/source.pt}"
+export OFFICE_OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_mlp3_density_all}"
+export OFFICE_SOURCE="${OFFICE_SOURCE:-${OFFICE_OUTPUT}/source.pt}"
 export TORCH_HOME="${TORCH_HOME:-${CIDA_REPO}/.cache/torch}"
 mkdir -p logs "${OFFICE_OUTPUT}"
 # Only one submission per call, with no arrays or dependent queued jobs.

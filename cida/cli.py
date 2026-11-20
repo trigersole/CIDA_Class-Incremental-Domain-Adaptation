@@ -34,7 +34,8 @@ def add_training_args(parser):
     parser.add_argument("--epochs", type=positive_int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--cov-ridge", type=float, help="Default: 0.1 for Digits, 0.14 for Office-31.")
-    parser.add_argument("--gaussian-score", choices=("density", "log-density"), default="density")
+    parser.add_argument("--gaussian-score", choices=("density", "log-density"), default=None,
+                        help="Office defaults to density; Digits friend defaults to log-density. Explicit values override presets.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=positive_int, help="Limit optimizer steps per epoch for smoke runs.")
 
@@ -46,14 +47,34 @@ def default_batch_size(benchmark):
 def training_config(args, benchmark="digits"):
     values = {field.name: getattr(args, field.name) for field in fields(TrainingConfig)}
     values["preset"] = args.preset or "baseline"
-    if values["preset"] == "friend":
-        values["gaussian_score"] = "log-density"
+    if values["gaussian_score"] is None:
+        values["gaussian_score"] = ("log-density" if benchmark == "digits"
+                                    and values["preset"] == "friend" else "density")
     values["batch_size"] = args.batch_size or default_batch_size(benchmark)
     if args.cov_ridge is None:
         values["cov_ridge"] = 0.14 if benchmark == "office31" else 0.1
     if args.lr <= 0 or values["cov_ridge"] <= 0:
         raise ValueError("Learning rate and covariance ridge must be positive.")
     return TrainingConfig(**values)
+
+
+def source_gaussian_score(checkpoint):
+    """Read the actual objective; older friend checkpoints used log-density."""
+    config = checkpoint.get("config", {})
+    return config.get("gaussian_score") or ("log-density" if config.get("preset") == "friend" else "density")
+
+
+def validate_office_source(checkpoint, gaussian_score):
+    if not (checkpoint.get("stage") == "source" and checkpoint.get("benchmark") == "office31"
+            and checkpoint.get("source_domain") == "amazon"
+            and len(checkpoint.get("shared_classes", [])) == 20
+            and checkpoint.get("config", {}).get("preset") == "friend"
+            and checkpoint.get("imagenet_pretrained") is True):
+        raise ValueError("Expected an ImageNet-initialized Amazon/20-class friend source checkpoint.")
+    actual = source_gaussian_score(checkpoint)
+    if actual != gaussian_score:
+        raise ValueError(f"Source was trained with {actual}, but this experiment requires {gaussian_score}. "
+                         "Use a fresh OFFICE_SOURCE/output path and retrain source; do not reuse the old checkpoint.")
 
 
 def configure_device(args):

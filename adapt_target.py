@@ -7,7 +7,7 @@ import statistics
 
 from cida.cli import (
     add_training_args, configure_device, load_checkpoint, positive_int, save_checkpoint,
-    save_json, seed_all, training_config,
+    save_json, seed_all, source_gaussian_score, training_config,
 )
 from cida.data import DIGIT_DOMAINS, PRIVATE, SHARED, target_data, target_evaluation
 from cida.diagnostics import EpochMetrics
@@ -76,6 +76,8 @@ def main():
     if args.preset is not None and args.preset != saved_preset:
         parser.error("--preset must match the source checkpoint; retrain source for a different preset")
     args.preset = saved_preset
+    if args.gaussian_score is None:
+        args.gaussian_score = source_gaussian_score(checkpoint)
     config = training_config(args, benchmark)
     if args.la1_temperature != 1 and config.gaussian_score != "log-density":
         parser.error("--la1-temperature requires --gaussian-score log-density or the friend preset")
@@ -129,6 +131,8 @@ def main():
                "source_checkpoint": str(args.source), "trials": results}
     summary["adaptation_settings"] = {
         "preset": config.preset, "epochs": config.epochs, "batch_size": config.batch_size,
+        "gaussian_score": config.gaussian_score,
+        "source_gaussian_score": source_gaussian_score(checkpoint),
         "la1_samples": args.la1_samples, "la1_temperature": args.la1_temperature,
         "eval_every": args.eval_every, "reported_epoch": config.epochs,
     }

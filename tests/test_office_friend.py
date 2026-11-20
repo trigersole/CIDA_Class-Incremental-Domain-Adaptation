@@ -56,20 +56,27 @@ class OfficeFriendTests(unittest.TestCase):
         torch.testing.assert_close(digits(digit_features), digit_features, rtol=0, atol=0)
 
     def test_office_training_and_checkpoint_roundtrip(self):
+        self._training_and_checkpoint_roundtrip("log-density")
+
+    def test_density_source_and_all_target_losses(self):
+        self._training_and_checkpoint_roundtrip("density")
+
+    def _training_and_checkpoint_roundtrip(self, score):
         # Substitute only the expensive CNN; keep 256-D Office heads/projections,
         # BN, Gaussian fitting, source training and every adaptation loss real.
         extractor = lambda *args, **kwargs: nn.Sequential(nn.Linear(12, 256), nn.BatchNorm1d(256))
         with patch("cida.models.feature_extractor", side_effect=extractor):
             source = SourceModel(2, "office31", preset="friend")
             config = TrainingConfig(preset="friend", epochs=1, batch_size=4,
-                                    gaussian_score="log-density", max_steps=10)
+                                    gaussian_score=score, max_steps=10)
             images = torch.randn(12, 12)
             bank, _ = train_source(source, TensorDataset(images, torch.arange(12) % 2),
                                    config, torch.device("cpu"))
             model = AdaptationModel(source, 1)
             history = train_target(model, TensorDataset(images[:8], torch.arange(8)),
-                                   images[8:9], bank, config, 1, la1_samples="confident")
+                                   images[8:9], bank, config, 1, la1_samples="all")
             self.assertEqual(history[-1]["updates"], dict.fromkeys(("Lr1", "Lr2", "Lc", "La1", "La2"), 2))
+            self.assertEqual(history[-1]["disabled_losses"], [])
             self.assertTrue(all(torch.isfinite(p).all() for p in model.parameters()))
             restored = AdaptationModel(source, 1)
             restored.load_state_dict(model.state_dict())

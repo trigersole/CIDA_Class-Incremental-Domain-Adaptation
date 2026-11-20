@@ -14,11 +14,23 @@ by the combined summary. No submission helper, `srun`, Python execution wrapper,
 or job array is involved. It uses your observed partition `MGPU-TC2`, one GPU,
 four CPUs, 32G RAM, and six hours. Logs are `office-JOBID.out` and
 `office-JOBID.err` in the repository root. Model/input/output device logging remains
-enabled. Training losses and budgets are unchanged. The new output folder is
-`runs/office_mlp3_no_la1`, so old residual results are retained. By default, reuse
-`runs/office_residual3_no_la1/source.pt` for the comparison (train it if absent).
-Set `OFFICE_SOURCE` to use a different matching friend source checkpoint.
-Do not resume old target checkpoints after changing the projection computation.
+enabled. Source Ls1 and target La1 now use **density** scores. All source and target
+losses are enabled, including negative training. The output folder is
+`runs/office_mlp3_density_all`, containing a new `source.pt`. Old log-density
+source checkpoints are rejected; completed density sources can be reused.
+Projection layers, AdaBN, covariance shrinkage and training budgets are unchanged.
+Do not resume old target checkpoints or mix results from different objectives.
+
+If you previously exported custom paths, use fresh paths for this experiment:
+
+```bash
+export OFFICE_OUTPUT="$PWD/runs/office_mlp3_density_all"
+export OFFICE_SOURCE="$OFFICE_OUTPUT/source.pt"
+sbatch office.slurm
+```
+
+Logs include `source_settings`/`target_settings` with `gaussian_score: density`;
+target epoch records must show `disabled_losses: []` and all five loss updates.
 
 The six-hour limit still applies. Resubmitting skips completed source/seeds;
 an interrupted stage restarts. This simpler launch removes the earlier job-step
@@ -27,7 +39,8 @@ of previous SIGKILLs. The sections below also document the earlier helper script
 use the direct `sbatch office.slurm` command for the simple launch.
 
 This runs Amazon-to-DSLR with 20 shared and 11 private classes, the new Office
-three-layer FC+ELU projections without skip connections, and La1 disabled. Digits is unchanged.
+three-layer FC+ELU projections without skip connections, and all five target losses enabled. La1 uses all unlabeled targets; La2 and Lc
+use the confident 20% subset. Digits defaults are unchanged.
 
 Each job requests one GPU, four CPUs, 32 GB **host RAM**, and six hours. GPU VRAM
 depends on your cluster's GPU allocation; `--mem` does not select GPU VRAM.
@@ -105,7 +118,7 @@ These are placeholders: no campus-specific partition/account was found in the
 existing project Slurm script. The new script follows its `sbatch`/`srun` pattern
 with the smaller allocation. It does not reuse the old 32-GPU resource request.
 
-To reuse your saved matching Office **friend source** checkpoint, set its path
+To reuse a saved matching Office **friend density source** checkpoint, set its path
 before submitting; it must be the full `source.pt`, not the notebook file:
 
 ```bash
@@ -117,7 +130,7 @@ Optional alternate paths (use absolute paths):
 
 ```bash
 export OFFICE_DATA="/absolute/path/to/office31"
-export OFFICE_OUTPUT="/absolute/path/to/runs/office_mlp3_no_la1"
+export OFFICE_OUTPUT="/absolute/path/to/runs/office_mlp3_density_all"
 ```
 
 ## Monitor and collect
@@ -139,14 +152,14 @@ the batch status and error log before attributing termination to a user action.
 ```bash
 squeue -u "$USER"
 ls logs/
-.venv/bin/python scripts/slurm/summarize_office.py runs/office_mlp3_no_la1
+.venv/bin/python scripts/slurm/summarize_office.py runs/office_mlp3_density_all
 ```
 
 Run the final command after all five seeds complete; it refuses missing seeds or
 inconsistent settings. Use your `OFFICE_OUTPUT` path if changed. It writes overall
 `metrics.json` containing the five trials and mean/sample standard deviation.
 Each seed has independent checkpoints and epoch JSON/CSV under
-`runs/office_mlp3_no_la1/target/seed_N/`. Completed trial folders are protected
+`runs/office_mlp3_density_all/target/seed_N/`. Completed trial folders are protected
 from accidental overwriting. To restart just a failed seed (for example seed 2),
 set the variables below, and submit directly:
 

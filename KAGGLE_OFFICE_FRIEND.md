@@ -1,4 +1,4 @@
-# Office-31 stabilized preset: Amazon to DSLR
+# Office-31 density experiment: Amazon to DSLR
 
 Attach the extracted Office-31 dataset and enable GPU and Internet. Run:
 
@@ -20,12 +20,12 @@ run(sys.executable, repo / 'run_office_friend.py')
 
 The runner locates the dataset, trains one new source checkpoint (one warm-up +
 50 source epochs), then runs 60 adaptation epochs for seeds 0-4. A new source is
-needed for the full preset because source Gaussian covariance regularization
-changes. The old baseline source is not silently reused. Subsequent runner calls
+needed because source Ls1 now uses density scores instead of log-density.
+Old log-density checkpoints are rejected for this experiment. Subsequent runner calls
 reuse its matching new checkpoint; adaptation starts afresh and overwrites target
 results in that directory, so use a new --output for another experiment.
 
-Outputs: /kaggle/working/runs/office_mlp3_confident/source.pt and confident/metrics.json,
+Outputs: /kaggle/working/runs/office_mlp3_density_all/source.pt and target/metrics.json,
 seed_*.pt, and per-epoch JSON/CSV diagnostics. Save notebook outputs after completion.
 Use --seeds 0 for a first diagnostic run; repeat with defaults for five trials.
 
@@ -39,51 +39,44 @@ Use --seeds 0 for a first diagnostic run; repeat with defaults for five trials.
 - Target BatchNorm recalibration (AdaBN) before adaptation.
 - Joint image/support forward passes for La1/La2, sharing training BN statistics.
 - Scale-adaptive Gaussian covariance shrinkage in source and target statistics.
-- Log-density separability scores.
+- Density separability scores for source Ls1 and target La1. Explicit CLI score
+  choices now override the preset; Digits friend still defaults to log-density.
 - At least one confident sample for every nonempty pseudo-class; empty classes
   still have no confident samples.
 - Shuffled confident subsets rather than class-balanced replacement sampling.
 - Five loader passes of round-robin updates per epoch, matching the Digits preset.
-- Confident-only La1 explicitly selected by the runner, fraction 20%, temperature 1.
+- La1 uses all unlabeled targets. La2 and Lc use the confident 20% subset.
+  All five target losses are enabled; source Ls1 and negative-training Ls2 are enabled.
 
 ResNet-50, the 2048-1024-256-256 feature head, classifier heads, and ImageNet input
 normalization remain Office-specific. Do not apply Digits [-1,1] normalization or
 replace ResNet with LeNet. All five losses remain enabled. This is a modified
 method, not an exact paper reproduction; 50/60 epochs are experiment choices.
 
-The adaptation update budget increases fivefold versus the previous Office run.
-A whole-preset comparison cannot attribute gains to one individual change.
+The existing friend-preset update budget remains five loader passes per target
+epoch. Compare against the no-skip, all-La1 log-density run at the same budget.
 Benchmark accuracy must be measured; synthetic integration tests do not predict it.
 
-## Rerunning Office without skip connections
+## Running the density experiment
 
-An existing matching Office **friend source** checkpoint can be reused: source
-training does not contain `f_e` or `f_d`. Start adaptation afresh and use a separate
-output folder, for example with the following Kaggle notebook cell after updating
-the repository and installing requirements:
+Run the notebook cell above after pulling the update. The runner trains source
+with `--gaussian-score density`, then adapts with `--gaussian-score density
+--la1-samples all`. It uses a new output folder, preserving the earlier results.
+Keep the source seed, support seeds, batch size, learning rate and epoch budgets
+fixed when comparing with the previous no-skip, all-La1 log-density run.
 
-```python
-import subprocess
-import sys
+The projections retain three FC+ELU layers without skips; reconstruction warm-up
+remains 2,000 steps. Covariance shrinkage, augmentation, AdaBN and optimizer
+assignments are unchanged. This tests the printed density objective and is not
+an exact reproduction of every paper setting.
 
-subprocess.run([
-    sys.executable, '/kaggle/working/CIDA_repo/adapt_target.py',
-    '--source', '/kaggle/working/runs/office_friend_a_d/source.pt',
-    '--target-domain', 'dslr', '--data', str(data_root),
-    '--device', 'cuda', '--batch-size', '8', '--lr', '0.0001',
-    '--epochs', '60', '--projection-steps', '2000',
-    '--confidence-fraction', '0.2', '--disable-separability',
-    '--eval-every', '1', '--seeds', '0',
-    '--output', '/kaggle/working/runs/office_mlp3_no_la1',
-], check=True)
-```
+Density logits use the actual Gaussian PDF, not a normalized substitute or a
+fallback to log-density. Very small PDFs can produce weak gradients; overflowing
+PDFs raise an error. Do not infer useful learning from a finite loss alone.
+`source_settings` and `target_settings` logs identify the selected score. Check
+`disabled_losses: []` and positive updates for all five target losses.
 
-Set `data_root` to the extracted Office-31 root containing `amazon` and `dslr`.
-This keeps La1 disabled to compare with the latest seed-0 ablation. For the
-confident-La1 experiment, replace `--disable-separability` with
-`--la1-samples`, `confident` and choose another output directory. For five seeds,
-pass `--seeds 0 1 2 3 4`. Start from the same source checkpoint and support seeds
-for a controlled comparison. Do not resume an old Office target checkpoint:
-removing the skip changes its forward computation even when weight shapes match.
-The standalone runner's default output is now `office_mlp3_confident`, so previous
-residual results are retained. Its confident-only La1 setting is unchanged.
+For a direct CLI adaptation call, an omitted `--gaussian-score` inherits the
+source checkpoint's score. Explicitly changing it permits a separate target-only
+ablation, but that is not this source-and-target comparison. Old friend source
+checkpoints without a score field are interpreted as log-density.

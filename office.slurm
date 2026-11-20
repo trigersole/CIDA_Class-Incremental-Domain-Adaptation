@@ -15,8 +15,8 @@ cd "${SLURM_SUBMIT_DIR}"
 
 PYTHON="$PWD/.venv/bin/python"
 DATA="${OFFICE_DATA:-$PWD/data/office31}"
-OUTPUT="${OFFICE_OUTPUT:-$PWD/runs/office_mlp3_no_la1}"
-SOURCE="${OFFICE_SOURCE:-$PWD/runs/office_residual3_no_la1/source.pt}"
+OUTPUT="${OFFICE_OUTPUT:-$PWD/runs/office_mlp3_density_all}"
+SOURCE="${OFFICE_SOURCE:-$OUTPUT/source.pt}"
 export TORCH_HOME="$PWD/.cache/torch"
 export PYTHONUNBUFFERED=1
 export CIDA_DEVICE_DIAGNOSTICS=1
@@ -32,11 +32,14 @@ mkdir -p "$OUTPUT"
 if [[ ! -f "$SOURCE" ]]; then
     "$PYTHON" -u train_source.py \
         --benchmark office31 --preset friend --domain amazon \
-        --office-shared 20 --office-weights imagenet \
+        --office-shared 20 --office-weights imagenet --gaussian-score density \
         --data "$DATA" --device cuda --batch-size 8 --lr 0.0001 \
         --epochs 50 --seed 0 --workers 0 --cpu-threads 4 \
         --output "$SOURCE"
 fi
+
+# A log-density source would invalidate the source-and-target density comparison.
+"$PYTHON" -c 'import sys; from cida.cli import load_checkpoint, validate_office_source; validate_office_source(load_checkpoint(sys.argv[1], "source"), "density")' "$SOURCE"
 
 # Stage 2: five sequential target trials. Completed seeds are retained.
 for SEED in 0 1 2 3 4; do
@@ -50,7 +53,7 @@ for SEED in 0 1 2 3 4; do
         --source "$SOURCE" --target-domain dslr --data "$DATA" \
         --device cuda --batch-size 8 --lr 0.0001 --epochs 60 \
         --projection-steps 2000 --confidence-fraction 0.2 \
-        --disable-separability --eval-every 1 \
+        --gaussian-score density --la1-samples all --eval-every 1 \
         --workers 0 --cpu-threads 4 --seeds "$SEED" --output "$TRIAL"
 done
 

@@ -89,6 +89,8 @@ def source_statistics(model, data_loader, device, ridge):
 
 
 def train_source(model, dataset, config, device, sigma=3.0, *, stats_dataset=None):
+    print(json.dumps(dict(stage="source_settings", gaussian_score=config.gaussian_score,
+                          negative_training=True, sigma=sigma)), flush=True)
     train_loader = loader(dataset, config, shuffle=True)
     stats_loader = loader(dataset if stats_dataset is None else stats_dataset, config)
     warmup = optimizer_for(config.lr, model.f_s, model.g_s)
@@ -222,6 +224,10 @@ def train_target(model, target, supports, source_prototypes, config, projection_
                  la1_samples="all", la1_temperature=1.0, epoch_callback=None):
     if la1_samples not in {"all", "confident"}:
         raise ValueError("la1_samples must be all or confident")
+    print(json.dumps(dict(stage="target_settings", gaussian_score=config.gaussian_score,
+                          la1_samples=la1_samples,
+                          disabled_losses=(["La1"] if disable_separability else []) +
+                                          (["La2"] if disable_guide_pulling else []))), flush=True)
     if not math.isfinite(la1_temperature) or la1_temperature <= 0:
         raise ValueError("la1_temperature must be finite and positive")
     if la1_temperature != 1 and config.gaussian_score != "log-density":

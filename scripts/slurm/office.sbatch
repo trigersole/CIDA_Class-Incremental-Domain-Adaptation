@@ -21,8 +21,8 @@ export NUMEXPR_NUM_THREADS=4
 export TORCH_HOME="${TORCH_HOME:-${CIDA_REPO}/.cache/torch}"
 PYTHON="${CIDA_PYTHON:?Python interpreter was not exported}"
 DATA="${OFFICE_DATA:-${CIDA_REPO}/data/office31}"
-OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_mlp3_no_la1}"
-SOURCE="${OFFICE_SOURCE:-${CIDA_REPO}/runs/office_residual3_no_la1/source.pt}"
+OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_mlp3_density_all}"
+SOURCE="${OFFICE_SOURCE:-${OUTPUT}/source.pt}"
 
 echo "Job=${SLURM_JOB_ID:-unset}; host=$(hostname); CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "Requested: one GPU, four CPUs, 32G host RAM. Actual allocation:"
@@ -40,7 +40,7 @@ train_source_stage() {
         [[ ! -e "${SOURCE}" ]] || { echo "Source already exists; submit again to reuse it." >&2; exit 2; }
         "${GPU_STEP[@]}" "${PYTHON}" -u scripts/slurm/gpu_step.py train_source.py \
             --benchmark office31 --preset friend --domain amazon \
-            --office-shared 20 --office-weights imagenet \
+            --office-shared 20 --office-weights imagenet --gaussian-score density \
             --data "${DATA}" --device cuda --batch-size 8 --lr 0.0001 \
             --epochs 50 --seed 0 --workers 0 --cpu-threads 4 \
             --output "${SOURCE}"
@@ -53,18 +53,14 @@ train_target_stage() {
         [[ ! -e "${TRIAL}/metrics.json" ]] || { echo "Completed result exists: ${TRIAL}; choose another OFFICE_OUTPUT." >&2; exit 2; }
         "${PYTHON}" - "${SOURCE}" <<'PY'
 import sys
-import torch
-c = torch.load(sys.argv[1], map_location="cpu", weights_only=True)
-assert (c.get("stage") == "source" and c.get("benchmark") == "office31"
-        and c.get("source_domain") == "amazon" and len(c.get("shared_classes", [])) == 20
-        and c.get("config", {}).get("preset") == "friend"
-        and c.get("imagenet_pretrained") is True), "Expected an ImageNet-initialized Amazon/20-class friend source"
+from cida.cli import load_checkpoint, validate_office_source
+validate_office_source(load_checkpoint(sys.argv[1], "source"), "density")
 PY
         "${GPU_STEP[@]}" "${PYTHON}" -u scripts/slurm/gpu_step.py adapt_target.py \
             --source "${SOURCE}" --target-domain dslr --data "${DATA}" \
             --device cuda --batch-size 8 --lr 0.0001 --epochs 60 \
             --projection-steps 2000 --confidence-fraction 0.2 \
-            --disable-separability --eval-every 1 \
+            --gaussian-score density --la1-samples all --eval-every 1 \
             --workers 0 --cpu-threads 4 --seeds "${SEED}" --output "${TRIAL}"
 }
 
