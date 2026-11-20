@@ -25,18 +25,17 @@ changes. The old baseline source is not silently reused. Subsequent runner calls
 reuse its matching new checkpoint; adaptation starts afresh and overwrites target
 results in that directory, so use a new --output for another experiment.
 
-Outputs: /kaggle/working/runs/office_friend_a_d/source.pt and confident/metrics.json,
+Outputs: /kaggle/working/runs/office_mlp3_confident/source.pt and confident/metrics.json,
 seed_*.pt, and per-epoch JSON/CSV diagnostics. Save notebook outputs after completion.
 Use --seeds 0 for a first diagnostic run; repeat with defaults for five trials.
 
 ## What transfers from Digits
 
 - Office projections use the paper's three 256-to-256 FC layers, each followed by
-  ELU, plus one skip connection around the complete branch:
-  `P(x) = x + ELU(W3 ELU(W2 ELU(W1 x + b1) + b2) + b3)`.
-  Both `f_e` and `f_d` use this design. The final FC weights and bias start at
-  zero, so each projection starts as exact identity. Digits keeps its existing
-  two-layer residual projection with linear output.
+  ELU, without a skip connection. Both `f_e` and `f_d` return the MLP output.
+  They use standard Linear initialization and the existing reconstruction warm-up
+  (`--projection-steps 2000`) to learn a near-identity mapping. Digits keeps its
+  existing two-layer residual projection with linear output.
 - Target BatchNorm recalibration (AdaBN) before adaptation.
 - Joint image/support forward passes for La1/La2, sharing training BN statistics.
 - Scale-adaptive Gaussian covariance shrinkage in source and target statistics.
@@ -56,7 +55,7 @@ The adaptation update budget increases fivefold versus the previous Office run.
 A whole-preset comparison cannot attribute gains to one individual change.
 Benchmark accuracy must be measured; synthetic integration tests do not predict it.
 
-## Rerunning the three-layer residual projection experiment
+## Rerunning Office without skip connections
 
 An existing matching Office **friend source** checkpoint can be reused: source
 training does not contain `f_e` or `f_d`. Start adaptation afresh and use a separate
@@ -75,7 +74,7 @@ subprocess.run([
     '--epochs', '60', '--projection-steps', '2000',
     '--confidence-fraction', '0.2', '--disable-separability',
     '--eval-every', '1', '--seeds', '0',
-    '--output', '/kaggle/working/runs/office_residual3_no_la1',
+    '--output', '/kaggle/working/runs/office_mlp3_no_la1',
 ], check=True)
 ```
 
@@ -83,6 +82,8 @@ Set `data_root` to the extracted Office-31 root containing `amazon` and `dslr`.
 This keeps La1 disabled to compare with the latest seed-0 ablation. For the
 confident-La1 experiment, replace `--disable-separability` with
 `--la1-samples`, `confident` and choose another output directory. For five seeds,
-pass `--seeds 0 1 2 3 4`. Old two-layer Office target checkpoints are incompatible
-with the new projection shapes and must not be used to resume this experiment.
-The skip connection is our modification, not part of the paper's architecture.
+pass `--seeds 0 1 2 3 4`. Start from the same source checkpoint and support seeds
+for a controlled comparison. Do not resume an old Office target checkpoint:
+removing the skip changes its forward computation even when weight shapes match.
+The standalone runner's default output is now `office_mlp3_confident`, so previous
+residual results are retained. Its confident-only La1 setting is unchanged.

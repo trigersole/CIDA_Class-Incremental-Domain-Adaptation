@@ -14,7 +14,7 @@ from cida.office import office_domain
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path)
-    parser.add_argument("--output", type=Path, default=Path("/kaggle/working/runs/office_friend_a_d"))
+    parser.add_argument("--output", type=Path, default=Path("/kaggle/working/runs/office_mlp3_confident"))
     parser.add_argument("--source-epochs", type=int, default=50)
     parser.add_argument("--target-epochs", type=int, default=60)
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])

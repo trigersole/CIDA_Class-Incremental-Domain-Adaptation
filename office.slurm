@@ -14,9 +14,9 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 
 PYTHON="$PWD/.venv/bin/python"
-DATA="$PWD/data/office31"
-OUTPUT="$PWD/runs/office_residual3_no_la1"
-SOURCE="$OUTPUT/source.pt"
+DATA="${OFFICE_DATA:-$PWD/data/office31}"
+OUTPUT="${OFFICE_OUTPUT:-$PWD/runs/office_mlp3_no_la1}"
+SOURCE="${OFFICE_SOURCE:-$PWD/runs/office_residual3_no_la1/source.pt}"
 export TORCH_HOME="$PWD/.cache/torch"
 export PYTHONUNBUFFERED=1
 export CIDA_DEVICE_DIAGNOSTICS=1

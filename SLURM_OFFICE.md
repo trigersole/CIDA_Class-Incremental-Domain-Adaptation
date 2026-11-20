@@ -14,7 +14,11 @@ by the combined summary. No submission helper, `srun`, Python execution wrapper,
 or job array is involved. It uses your observed partition `MGPU-TC2`, one GPU,
 four CPUs, 32G RAM, and six hours. Logs are `office-JOBID.out` and
 `office-JOBID.err` in the repository root. Model/input/output device logging remains
-enabled. Training settings and the existing output folder are unchanged.
+enabled. Training losses and budgets are unchanged. The new output folder is
+`runs/office_mlp3_no_la1`, so old residual results are retained. By default, reuse
+`runs/office_residual3_no_la1/source.pt` for the comparison (train it if absent).
+Set `OFFICE_SOURCE` to use a different matching friend source checkpoint.
+Do not resume old target checkpoints after changing the projection computation.
 
 The six-hour limit still applies. Resubmitting skips completed source/seeds;
 an interrupted stage restarts. This simpler launch removes the earlier job-step
@@ -23,7 +27,7 @@ of previous SIGKILLs. The sections below also document the earlier helper script
 use the direct `sbatch office.slurm` command for the simple launch.
 
 This runs Amazon-to-DSLR with 20 shared and 11 private classes, the new Office
-three-layer FC+ELU residual projections, and La1 disabled. Digits is unchanged.
+three-layer FC+ELU projections without skip connections, and La1 disabled. Digits is unchanged.
 
 Each job requests one GPU, four CPUs, 32 GB **host RAM**, and six hours. GPU VRAM
 depends on your cluster's GPU allocation; `--mem` does not select GPU VRAM.
@@ -113,7 +117,7 @@ Optional alternate paths (use absolute paths):
 
 ```bash
 export OFFICE_DATA="/absolute/path/to/office31"
-export OFFICE_OUTPUT="/absolute/path/to/runs/office_residual3_no_la1"
+export OFFICE_OUTPUT="/absolute/path/to/runs/office_mlp3_no_la1"
 ```
 
 ## Monitor and collect
@@ -135,14 +139,14 @@ the batch status and error log before attributing termination to a user action.
 ```bash
 squeue -u "$USER"
 ls logs/
-.venv/bin/python scripts/slurm/summarize_office.py runs/office_residual3_no_la1
+.venv/bin/python scripts/slurm/summarize_office.py runs/office_mlp3_no_la1
 ```
 
 Run the final command after all five seeds complete; it refuses missing seeds or
 inconsistent settings. Use your `OFFICE_OUTPUT` path if changed. It writes overall
 `metrics.json` containing the five trials and mean/sample standard deviation.
 Each seed has independent checkpoints and epoch JSON/CSV under
-`runs/office_residual3_no_la1/target/seed_N/`. Completed trial folders are protected
+`runs/office_mlp3_no_la1/target/seed_N/`. Completed trial folders are protected
 from accidental overwriting. To restart just a failed seed (for example seed 2),
 set the variables below, and submit directly:
 

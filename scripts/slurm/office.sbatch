@@ -21,8 +21,8 @@ export NUMEXPR_NUM_THREADS=4
 export TORCH_HOME="${TORCH_HOME:-${CIDA_REPO}/.cache/torch}"
 PYTHON="${CIDA_PYTHON:?Python interpreter was not exported}"
 DATA="${OFFICE_DATA:-${CIDA_REPO}/data/office31}"
-OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_residual3_no_la1}"
-SOURCE="${OFFICE_SOURCE:-${OUTPUT}/source.pt}"
+OUTPUT="${OFFICE_OUTPUT:-${CIDA_REPO}/runs/office_mlp3_no_la1}"
+SOURCE="${OFFICE_SOURCE:-${CIDA_REPO}/runs/office_residual3_no_la1/source.pt}"
 
 echo "Job=${SLURM_JOB_ID:-unset}; host=$(hostname); CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "Requested: one GPU, four CPUs, 32G host RAM. Actual allocation:"

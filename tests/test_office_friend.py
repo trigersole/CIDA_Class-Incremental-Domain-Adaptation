@@ -16,29 +16,31 @@ class OfficeFriendTests(unittest.TestCase):
         torch.set_num_threads(1)
         torch.manual_seed(7)
 
-    def test_real_office_source_compatibility_and_identity(self):
+    def test_real_office_source_compatibility(self):
         source = SourceModel(20, "office31", preset="friend")
         self.assertEqual(source.f_s[1].in_features, 2048)
         self.assertEqual(source.f_s[6].out_features, 256)
         model = AdaptationModel(source, 11)
         x = torch.randn(4, 256)
-        torch.testing.assert_close(model.f_d(model.f_e(x)), x, rtol=0, atol=0)
+        self.assertEqual(model.f_d(model.f_e(x)).shape, x.shape)
         torch.testing.assert_close(model.f_t[1].weight, source.f_s[1].weight)
         torch.testing.assert_close(model.g_s[0].weight, source.g_s[0].weight)
         self.assertFalse(any(p.requires_grad for p in model.g_s.parameters()))
         self.assertEqual(model.joint_logits(x).shape, (4, 31))
 
-    def test_paper_office_branch_with_skip_can_learn(self):
+    def test_paper_office_projection_without_skip_can_learn(self):
         projection = projector("office31", "friend")
         self.assertEqual([type(layer) for layer in projection.net],
                          [nn.Linear, nn.ELU] * 3)
         self.assertTrue(all(layer.in_features == layer.out_features == 256
                             for layer in projection.net if isinstance(layer, nn.Linear)))
         x = torch.randn(4, 256, requires_grad=True)
-        torch.testing.assert_close(projection(x), x, rtol=0, atol=0)
+        torch.testing.assert_close(projection(x), projection.net(x), rtol=0, atol=0)
+        self.assertFalse(torch.equal(projection(x), x))
         projection(x).sum().backward()
-        torch.testing.assert_close(x.grad, torch.ones_like(x))
-        self.assertGreater(projection.net[-2].weight.grad.abs().sum().item(), 0)
+        for layer in projection.net:
+            if isinstance(layer, nn.Linear):
+                self.assertGreater(layer.weight.grad.abs().sum().item(), 0)
         optimizer = torch.optim.Adam(projection.parameters(), lr=1e-4)
         optimizer.step()
         optimizer.zero_grad()
@@ -50,6 +52,8 @@ class OfficeFriendTests(unittest.TestCase):
         digits = projector("digits", "friend")
         self.assertEqual(len(digits.net), 3)
         self.assertIsInstance(digits.net[1], nn.LeakyReLU)
+        digit_features = torch.randn(4, 100)
+        torch.testing.assert_close(digits(digit_features), digit_features, rtol=0, atol=0)
 
     def test_office_training_and_checkpoint_roundtrip(self):
         # Substitute only the expensive CNN; keep 256-D Office heads/projections,
