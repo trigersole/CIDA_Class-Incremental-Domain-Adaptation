@@ -1,5 +1,10 @@
 # Office-31 on a campus Slurm cluster
 
+For source-gradient, projection-warm-up and paired BN diagnostics, use
+`sbatch office_checks.slurm`; see [OFFICE_TRAINING_CHECKS.md](OFFICE_TRAINING_CHECKS.md).
+This reuses the previous log-density source for two five-epoch target trials.
+The full density experiment is documented below.
+
 ## Simple submission (use this on CCDS-TC2)
 
 Run from the repository root after the uv setup and dataset extraction:

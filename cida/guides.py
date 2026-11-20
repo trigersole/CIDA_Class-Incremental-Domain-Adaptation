@@ -9,12 +9,13 @@ def build_guides(model, source_prototypes, supports):
     shared = model.f_e(source_prototypes.means.to(supports))
     # Use running statistics for Office support images so that each guide
     # is independent of the other support images. Gradients still reach f_t.
-    was_training = model.f_t.training
+    modes = {module: module.training for module in model.f_t.modules()}
     model.f_t.eval()
     try:
         private = model.f_t(supports)
     finally:
-        model.f_t.train(was_training)
+        for module, mode in modes.items():
+            module.training = mode
     return torch.cat((shared, private), dim=0)
 
 

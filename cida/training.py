@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+from contextlib import contextmanager
 
 import torch
 from torch.nn import functional as F
@@ -219,22 +220,55 @@ def target_loss(name, model, stats, source_prototypes, supports, images,
     raise ValueError(f"Unknown target loss {name}.")
 
 
+def freeze_batchnorm_statistics(module):
+    """Keep running statistics fixed while leaving affine parameters trainable."""
+    for layer in module.modules():
+        if isinstance(layer, torch.nn.modules.batchnorm._BatchNorm):
+            layer.eval()
+
+
+@contextmanager
+def diagnostic_state(model, device):
+    """Read-only diagnostics must not alter modes or training randomness."""
+    modes = {module: module.training for module in model.modules()}
+    python_rng = random.getstate()
+    devices = [device.index or 0] if device.type == "cuda" else []
+    try:
+        with torch.random.fork_rng(devices=devices):
+            yield
+    finally:
+        random.setstate(python_rng)
+        for module, mode in modes.items():
+            module.training = mode
+
+
 def train_target(model, target, supports, source_prototypes, config, projection_steps,
                  fraction=0.2, *, stats_target=None, disable_guide_pulling=False, disable_separability=False,
-                 la1_samples="all", la1_temperature=1.0, epoch_callback=None):
+                 la1_samples="all", la1_temperature=1.0, epoch_callback=None,
+                 freeze_bn_stats=False, initialization_callback=None):
     if la1_samples not in {"all", "confident"}:
         raise ValueError("la1_samples must be all or confident")
     print(json.dumps(dict(stage="target_settings", gaussian_score=config.gaussian_score,
                           la1_samples=la1_samples,
+                          freeze_bn_stats=freeze_bn_stats,
                           disabled_losses=(["La1"] if disable_separability else []) +
                                           (["La2"] if disable_guide_pulling else []))), flush=True)
     if not math.isfinite(la1_temperature) or la1_temperature <= 0:
         raise ValueError("la1_temperature must be finite and positive")
     if la1_temperature != 1 and config.gaussian_score != "log-density":
         raise ValueError("La1 temperature scaling requires log-density scores")
+
+    def initialization_report(stage):
+        if initialization_callback is not None:
+            with diagnostic_state(model, supports.device), torch.inference_mode():
+                initialization_callback(stage, model)
+
+    initialization_report("before_adabn")
     if config.preset == "friend":
         recalibrate_batchnorm(model.f_t, loader(target if stats_target is None else stats_target, config), supports.device)
+    initialization_report("after_adabn_before_warmup")
     history = [warmup_projections(model, source_prototypes, config, projection_steps)]
+    initialization_report("after_projection_warmup")
     target_loader = loader(target, config, shuffle=True)
     stats_loader = loader(target if stats_target is None else stats_target, config)
     optimizers = target_optimizers(model, config.lr)
@@ -265,6 +299,8 @@ def train_target(model, target, supports, source_prototypes, config, projection_
         history.append({"stage": "target_initialization", "epoch": 0, "metrics": initial_metrics})
     for epoch in range(1, config.epochs + 1):
         model.train()
+        if freeze_bn_stats:
+            freeze_batchnorm_statistics(model.f_t)
         totals, steps = defaultdict(float), defaultdict(int)
         epoch_updates = len(target_loader) * (5 if config.preset == "friend" else 1)
         step_count = min(config.max_steps or epoch_updates, epoch_updates)
@@ -313,6 +349,7 @@ def train_target(model, target, supports, source_prototypes, config, projection_
             confident_count=previous_confident_count, updates=dict(steps),
             next_pseudo_label_counts=stats.counts.tolist(),
             la1_samples=la1_samples, la1_temperature=la1_temperature,
+            freeze_bn_stats=freeze_bn_stats,
             **({"metrics": metrics} if metrics is not None else {}),
             disabled_losses=(["La2"] if disable_guide_pulling else []) + (["La1"] if disable_separability else []),
         ))
