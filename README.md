@@ -8,6 +8,10 @@ Use Python 3.10 or newer and a compatible PyTorch/torchvision pair. The commands
 
 ### Digits
 
+For MNIST-to-USPS, USPS-to-MNIST and SVHN-to-MNIST using the successful modified
+preset, see [DIGITS_TRANSFERS.md](DIGITS_TRANSFERS.md). The new source `--domain`
+and adaptation `--target-domain` options leave the original M-to-U defaults intact.
+
 ```text
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v

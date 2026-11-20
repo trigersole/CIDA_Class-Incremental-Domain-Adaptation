@@ -3,7 +3,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from cida.cli import add_training_args, configure_device, save_checkpoint, seed_all, training_config
-from cida.data import SHARED, source_dataset
+from cida.data import DIGIT_DOMAINS, SHARED, source_dataset
 from cida.models import SourceModel
 from cida.office import OFFICE_DOMAINS, office_source
 from cida.training import train_source
@@ -13,7 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description="CIDA Stage 1: foresighted source training.")
     add_training_args(parser)
     parser.add_argument("--benchmark", choices=("digits", "office31"), default="digits")
-    parser.add_argument("--domain", choices=OFFICE_DOMAINS, help="Office-31 source domain.")
+    parser.add_argument("--domain", choices=OFFICE_DOMAINS + DIGIT_DOMAINS, help="Source domain; Digits defaults to mnist.")
     parser.add_argument("--office-shared", type=int, choices=(10, 20), default=20)
     parser.add_argument("--office-weights", choices=("imagenet", "none"), default="imagenet")
     parser.add_argument("--output", type=Path, default=Path("runs/source.pt"))
@@ -22,10 +22,12 @@ def main():
     if args.sigma <= 0:
         parser.error("--sigma must be positive")
     office = args.benchmark == "office31"
-    if office and args.domain is None:
-        parser.error("--domain is required for Office-31")
-    if not office and args.domain is not None:
-        parser.error("--domain applies only to Office-31")
+    if office and args.domain not in OFFICE_DOMAINS:
+        parser.error("Office-31 requires --domain amazon, dslr or webcam")
+    if not office:
+        args.domain = args.domain or "mnist"
+        if args.domain not in DIGIT_DOMAINS:
+            parser.error("Digits requires --domain mnist, usps or svhn")
     if office and args.download:
         parser.error("Extract Office-31 under --data. --download is for Digits.")
 
@@ -35,7 +37,7 @@ def main():
     if office:
         dataset, stats_dataset, shared = office_source(args.data, args.domain, args.office_shared)
     else:
-        dataset, stats_dataset, shared = source_dataset(args.data, args.download, config.preset), None, SHARED
+        dataset, stats_dataset, shared = source_dataset(args.data, args.download, config.preset, args.domain), None, SHARED
     pretrained = office and args.office_weights == "imagenet"
     model = SourceModel(len(shared), args.benchmark, pretrained=pretrained, preset=config.preset).to(device)
     prototypes, history = train_source(model, dataset, config, device, args.sigma, stats_dataset=stats_dataset)

@@ -3,6 +3,8 @@ __pycache__/
 logs/
 office-*.out
 office-*.err
+digits-*.out
+digits-*.err
 runs/
 .cache/
 .venv/

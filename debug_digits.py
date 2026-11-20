@@ -140,10 +140,13 @@ def main():
     args = parser.parse_args()
     device = configure_device(args)
     source_checkpoint = load_checkpoint(args.source, "source")
-    if source_checkpoint.get("benchmark", "digits") != "digits":
+    if (source_checkpoint.get("benchmark", "digits") != "digits"
+            or (source_checkpoint.get("source_domain") or "mnist") != "mnist"):
         parser.error("This diagnostic is for MNIST -> USPS checkpoints")
     target_checkpoint = load_checkpoint(args.target_checkpoint, "target") if args.target_checkpoint else None
     if target_checkpoint is not None:
+        if (target_checkpoint.get("target_domain") or "usps") != "usps":
+            parser.error("This diagnostic currently supports only MNIST -> USPS")
         if target_checkpoint.get("benchmark", "digits") != "digits":
             parser.error("Target checkpoint must be a Digits model")
         if tuple(target_checkpoint["shared_classes"]) != SHARED or tuple(target_checkpoint["private_classes"]) != PRIVATE:

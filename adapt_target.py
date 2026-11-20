@@ -9,7 +9,7 @@ from cida.cli import (
     add_training_args, configure_device, load_checkpoint, positive_int, save_checkpoint,
     save_json, seed_all, training_config,
 )
-from cida.data import PRIVATE, SHARED, target_data, target_evaluation
+from cida.data import DIGIT_DOMAINS, PRIVATE, SHARED, target_data, target_evaluation
 from cida.diagnostics import EpochMetrics
 from cida.metrics import evaluate
 from cida.models import AdaptationModel, SourceModel
@@ -23,7 +23,7 @@ def main():
     add_training_args(parser)
     parser.add_argument("--source", type=Path, default=Path("runs/source.pt"))
     parser.add_argument("--output", type=Path, default=Path("runs/target"))
-    parser.add_argument("--target-domain", choices=OFFICE_DOMAINS, help="Office-31 target domain.")
+    parser.add_argument("--target-domain", choices=OFFICE_DOMAINS + DIGIT_DOMAINS, help="Target domain; Digits defaults to usps.")
     parser.add_argument("--protocol", choices=("held-out", "transductive"),
                         help="Defaults to held-out for Digits and transductive for Office-31.")
     parser.add_argument("--projection-steps", type=positive_int, default=1000)
@@ -59,14 +59,18 @@ def main():
     source_domain = checkpoint.get("source_domain")
     protocol = args.protocol or ("transductive" if office else "held-out")
     if office:
-        if args.target_domain is None or args.target_domain == source_domain:
+        if args.target_domain not in OFFICE_DOMAINS or args.target_domain == source_domain:
             parser.error("Choose --target-domain distinct from the Office-31 source domain")
         if protocol != "transductive" or args.download:
             parser.error("Office-31 uses extracted folders and transductive evaluation")
         dataset, private = office_target(args.data, args.target_domain, shared)
     else:
-        if args.target_domain is not None or shared != SHARED:
-            parser.error("Digits uses source labels 0-4 and no --target-domain")
+        source_domain = source_domain or "mnist"  # Legacy M-to-U checkpoints.
+        args.target_domain = args.target_domain or "usps"
+        if source_domain not in DIGIT_DOMAINS or args.target_domain not in DIGIT_DOMAINS or shared != SHARED:
+            parser.error("Digits uses domains mnist/usps/svhn and source labels 0-4")
+        if args.target_domain == source_domain:
+            parser.error("Choose a target domain distinct from the source")
         private = PRIVATE
     saved_preset = checkpoint.get("config", {}).get("preset", "baseline")
     if args.preset is not None and args.preset != saved_preset:
@@ -88,9 +92,9 @@ def main():
                 dataset, args.target_domain, shared, private, seed
             )
         else:
-            target, supports, support_ids = target_data(args.data, args.download, protocol, seed, config.preset)
+            target, supports, support_ids = target_data(args.data, args.download, protocol, seed, config.preset, args.target_domain)
             stats_target = None
-            test = target_evaluation(args.data, args.download, protocol, support_ids, config.preset)
+            test = target_evaluation(args.data, args.download, protocol, support_ids, config.preset, args.target_domain)
         model = AdaptationModel(source, len(private)).to(device)
         epoch_metrics = EpochMetrics(args.output, seed, loader(test, trial), device,
                                      len(shared), len(shared) + len(private), trial.epochs, args.eval_every)

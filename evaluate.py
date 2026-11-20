@@ -29,7 +29,8 @@ def main():
         test = office_evaluation(args.data, checkpoint["target_domain"], checkpoint["shared_classes"],
                                  checkpoint["private_classes"], checkpoint["support_ids"])
     else:
-        test = target_evaluation(args.data, args.download, checkpoint["protocol"], checkpoint["support_ids"], preset)
+        test = target_evaluation(args.data, args.download, checkpoint["protocol"], checkpoint["support_ids"],
+                                 preset, checkpoint.get("target_domain") or "usps")
     config = TrainingConfig(batch_size=args.batch_size or default_batch_size(benchmark), workers=args.workers)
     print(json.dumps(evaluate(model, loader(test, config), device, num_shared, num_shared + num_private), indent=2))
 

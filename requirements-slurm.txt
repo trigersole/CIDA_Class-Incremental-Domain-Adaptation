@@ -1,3 +1,4 @@
 # Match the PyTorch/torchvision versions used for local CIDA verification.
 torch==2.5.1
 torchvision==0.20.1
+scipy>=1.10

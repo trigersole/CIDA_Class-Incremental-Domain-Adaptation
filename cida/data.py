@@ -7,6 +7,7 @@ from torch.utils.data import Dataset, Subset
 SHARED = (0, 1, 2, 3, 4)
 PRIVATE = (5, 6, 7, 8, 9)
 CLASSES = SHARED + PRIVATE
+DIGIT_DOMAINS = ("mnist", "usps", "svhn")
 
 
 def digits(name, root, train, download, preset="baseline"):
@@ -14,16 +15,22 @@ def digits(name, root, train, download, preset="baseline"):
 
     transform = transforms.Compose([
         transforms.Resize((32, 32)),
-        transforms.Grayscale(num_output_channels=3),
+        *([] if name == "svhn" else [transforms.Grayscale(num_output_channels=3)]),
         transforms.ToTensor(),
         *([transforms.Normalize((0.5,) * 3, (0.5,) * 3)] if preset == "friend" else []),
     ])
+    if name == "svhn":
+        dataset = datasets.SVHN(str(Path(root) / name), split="train" if train else "test",
+                                transform=transform, download=download)
+        # torchvision already remaps SVHN's digit-zero label from 10 to 0.
+        dataset.targets = dataset.labels
+        return dataset
     dataset_type = {"mnist": datasets.MNIST, "usps": datasets.USPS}[name]
     return dataset_type(str(Path(root) / name), train=train, transform=transform, download=download)
 
 
-def source_dataset(root, download, preset="baseline"):
-    source = digits("mnist", root, train=True, download=download, **({"preset": preset} if preset != "baseline" else {}))
+def source_dataset(root, download, preset="baseline", domain="mnist"):
+    source = digits(domain, root, train=True, download=download, **({"preset": preset} if preset != "baseline" else {}))
     labels = torch.as_tensor(source.targets)
     return Subset(source, torch.isin(labels, torch.tensor(SHARED)).nonzero(as_tuple=True)[0].tolist())
 
@@ -57,8 +64,8 @@ class ConfidentTarget(Dataset):
         return image, self.pseudo_labels[index]
 
 
-def target_data(root, download, protocol, seed, preset="baseline"):
-    target = digits("usps", root, train=(protocol == "held-out"), download=download, **({"preset": preset} if preset != "baseline" else {}))
+def target_data(root, download, protocol, seed, preset="baseline", domain="usps"):
+    target = digits(domain, root, train=(protocol == "held-out"), download=download, **({"preset": preset} if preset != "baseline" else {}))
     labels = torch.as_tensor(target.targets)
     rng = torch.Generator().manual_seed(seed)
     support_ids = []
@@ -71,8 +78,8 @@ def target_data(root, download, protocol, seed, preset="baseline"):
     return unlabeled, supports, support_ids
 
 
-def target_evaluation(root, download, protocol, support_ids, preset="baseline"):
-    test = digits("usps", root, train=False, download=download, **({"preset": preset} if preset != "baseline" else {}))
+def target_evaluation(root, download, protocol, support_ids, preset="baseline", domain="usps"):
+    test = digits(domain, root, train=False, download=download, **({"preset": preset} if preset != "baseline" else {}))
     if protocol == "transductive":
         support_set = set(support_ids)
         return Subset(test, [i for i in range(len(test)) if i not in support_set])
